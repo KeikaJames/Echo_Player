@@ -3,122 +3,126 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Echo Player — 会自己找歌词的 macOS 播放器</title>
-<meta name="description" content="打开一首歌，歌词自己出现；打开一部片，字幕自己浮上来。免费、开源、全程本机识别的 macOS 播放器。">
+<title>Echo Player — 歌词，自己出现。</title>
+<meta name="description" content="免费开源的 macOS 播放器：打开一首歌，歌词自己出现；打开一部片，字幕自己浮上来。识别全在本机完成。">
 <link rel="icon" href="icon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300;12..96,600;12..96,800&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #F6F5FA;
-    --ink: #1D1B26;
-    --muted: #6E6A7C;
-    --hairline: #E4E1EE;
-    --violet: #6C5CE7;
-    --violet-deep: #4F46C9;
-    --card: #FFFFFF;
-    --latin: "Bricolage Grotesque", "PingFang SC", -apple-system, sans-serif;
-    --body: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --bg: #fbfbfd;
+    --alt: #f5f5f7;
+    --ink: #1d1d1f;
+    --muted: #6e6e73;
+    --hairline: #d2d2d7;
+    --accent: #6e5ce7;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
     background: var(--bg);
     color: var(--ink);
-    font-family: var(--body);
-    line-height: 1.75;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro SC", "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    line-height: 1.6;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
-  a { color: var(--violet-deep); text-decoration: none; }
+  a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  a:focus-visible, button:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; border-radius: 4px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
 
-  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px; }
-
-  /* ── 顶栏 ── */
-  header.site {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 22px 0;
+  /* ── 导航：细、糊、安静 ── */
+  nav.site {
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    background: rgba(251, 251, 253, 0.8);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   }
-  .brand { display: flex; align-items: center; gap: 10px; font-family: var(--latin); font-weight: 600; font-size: 17px; color: var(--ink); }
-  .brand img { width: 30px; height: 30px; border-radius: 7px; }
+  nav.site .inner {
+    max-width: 980px; margin: 0 auto; padding: 0 22px;
+    height: 48px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--ink); }
+  .brand img { width: 22px; height: 22px; border-radius: 5px; }
   .brand:hover { text-decoration: none; }
-  nav.top { display: flex; gap: 22px; font-size: 14px; }
-  nav.top a { color: var(--muted); }
-  nav.top a:hover { color: var(--ink); text-decoration: none; }
+  nav.site .links { display: flex; gap: 26px; font-size: 12px; }
+  nav.site .links a { color: rgba(29, 29, 31, 0.72); transition: color 0.2s; }
+  nav.site .links a:hover { color: var(--ink); text-decoration: none; }
 
   /* ── Hero ── */
-  .hero { text-align: center; padding: 64px 0 26px; }
+  .hero { text-align: center; padding: 96px 22px 0; }
   .hero h1 {
-    font-family: var(--latin);
-    font-weight: 800;
-    font-size: clamp(40px, 7vw, 64px);
-    letter-spacing: -0.02em;
-    line-height: 1.1;
+    font-size: clamp(48px, 9vw, 88px);
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+    text-wrap: balance;
   }
-  .hero .zh-sub {
-    margin-top: 18px;
-    font-size: clamp(17px, 2.6vw, 21px);
+  .hero .tag {
+    margin-top: 14px;
+    font-size: clamp(22px, 3.4vw, 30px);
+    font-weight: 500;
+    letter-spacing: -0.01em;
     color: var(--ink);
   }
-  .hero .zh-sub b { font-weight: 600; }
-  .hero .quiet { margin-top: 10px; color: var(--muted); font-size: 15px; }
-
-  .cta-row { margin-top: 34px; display: flex; gap: 14px; justify-content: center; align-items: center; flex-wrap: wrap; }
-  .btn-download {
-    display: inline-flex; align-items: center; gap: 10px;
-    background: linear-gradient(135deg, #6C5CE7, #A44CF0);
-    color: #fff; font-size: 16px; font-weight: 600;
-    padding: 13px 26px; border-radius: 14px;
-    box-shadow: 0 8px 24px rgba(108, 92, 231, 0.35);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  .hero .sub {
+    margin-top: 12px;
+    font-size: 17px;
+    color: var(--muted);
+    text-wrap: balance;
   }
-  .btn-download:hover { transform: translateY(-1px); box-shadow: 0 12px 30px rgba(108, 92, 231, 0.45); text-decoration: none; }
-  .btn-download svg { width: 17px; height: 17px; }
-  .cta-meta { color: var(--muted); font-size: 13.5px; }
-  .cta-meta code { font-family: var(--mono); font-size: 12.5px; }
+  .cta { margin-top: 30px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .pill {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    font-size: 17px; font-weight: 500;
+    padding: 11px 24px;
+    border-radius: 980px;
+    transition: transform 0.2s ease, background 0.2s ease;
+  }
+  .pill:hover { background: #5d4bd6; text-decoration: none; }
+  .pill:active { transform: scale(0.98); }
+  .cta small { font-size: 12px; color: var(--muted); }
 
-  /* ── 签名元素：发光的播放器窗口 + 逐字点亮歌词 ── */
-  .stage { position: relative; margin: 58px auto 0; max-width: 640px; }
+  /* ── 发光窗口：整页唯一的彩色时刻 ── */
+  .stage { max-width: 620px; margin: 64px auto 0; padding: 0 22px 110px; }
   .glow-window {
     position: relative;
-    background: linear-gradient(160deg, #FDFDFE, #F4F2FA);
-    border-radius: 22px;
-    padding: 46px 42px 42px;
+    background: #fff;
+    border-radius: 20px;
+    padding: 52px 46px 46px;
     text-align: left;
-    box-shadow: 0 20px 60px rgba(50, 40, 90, 0.10);
+    box-shadow: 0 30px 70px rgba(0, 0, 0, 0.08);
   }
-  /* 光晕：两层锥形渐变描边，外层大模糊向外洒 */
   .glow-window::before, .glow-window::after {
-    content: ""; position: absolute; inset: -3px; border-radius: 25px;
-    padding: 3px;
+    content: ""; position: absolute; inset: -2px; border-radius: 22px;
+    padding: 2px;
     background: conic-gradient(from var(--sweep, 0deg),
       #ff5f6d, #ffc371, #7ee081, #4bc0ff, #8a5cf6, #f45cc1, #ff5f6d);
     -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
     -webkit-mask-composite: xor; mask-composite: exclude;
-    animation: sweep 14s linear infinite, breathe 3.4s ease-in-out infinite;
+    animation: sweep 16s linear infinite;
   }
-  .glow-window::after { inset: -6px; border-radius: 28px; padding: 7px; filter: blur(14px); opacity: 0.55; }
+  .glow-window::after {
+    inset: -5px; border-radius: 25px; padding: 6px;
+    filter: blur(16px); opacity: 0.5;
+    animation: sweep 16s linear infinite, breathe 3.6s ease-in-out infinite;
+  }
   @property --sweep { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
   @keyframes sweep { to { --sweep: 360deg; } }
-  @keyframes breathe { 0%,100% { opacity: 0.85; } 50% { opacity: 0.55; } }
-  .glow-window::after { animation: sweep 14s linear infinite, breathe-outer 3.4s ease-in-out infinite; }
-  @keyframes breathe-outer { 0%,100% { opacity: 0.6; filter: blur(14px); } 50% { opacity: 0.3; filter: blur(18px); } }
+  @keyframes breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.28; } }
 
-  .traffic { display: flex; gap: 7px; position: absolute; top: 17px; left: 18px; }
-  .traffic i { width: 11px; height: 11px; border-radius: 50%; background: #E3E0EC; }
+  .traffic { display: flex; gap: 7px; position: absolute; top: 18px; left: 18px; }
+  .traffic i { width: 11px; height: 11px; border-radius: 50%; background: #e8e8ed; }
 
   .lyric-line {
     font-size: 21px; font-weight: 600; letter-spacing: 0.01em;
-    color: #C9C4D8;
-    margin: 14px 0;
-    transition: font-size 0.3s ease;
+    color: #d2d2d7;
+    margin: 15px 0;
   }
   .lyric-line.now {
     font-size: 26px;
-    background: linear-gradient(90deg, var(--ink) 50%, #C9C4D8 50%);
+    background: linear-gradient(90deg, var(--ink) 50%, #d2d2d7 50%);
     background-size: 205% 100%;
     background-position: 100% 0;
     -webkit-background-clip: text; background-clip: text;
@@ -132,213 +136,178 @@
     .lyric-line.now { animation: none; background-position: 0% 0; }
   }
 
-  /* ── 章节 ── */
-  section { padding: 72px 0 8px; }
-  .eyebrow {
-    font-family: var(--latin); font-weight: 600; font-size: 13px;
-    letter-spacing: 0.14em; text-transform: uppercase; color: var(--violet-deep);
+  /* ── 章节骨架 ── */
+  section { padding: 110px 22px; }
+  section.alt { background: var(--alt); }
+  .inner-narrow { max-width: 980px; margin: 0 auto; }
+  h2 {
+    font-size: clamp(32px, 5vw, 48px);
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    text-align: center;
+    text-wrap: balance;
   }
-  h2 { font-size: clamp(24px, 4vw, 32px); font-weight: 700; margin-top: 10px; letter-spacing: -0.01em; }
-  .lede { color: var(--muted); margin-top: 10px; max-width: 620px; }
+  .h2-sub { margin-top: 12px; text-align: center; font-size: 17px; color: var(--muted); text-wrap: balance; }
 
-  /* 功能：曲目列表隐喻 */
-  .tracklist { margin-top: 34px; border-top: 1px solid var(--hairline); }
-  .track {
-    display: grid; grid-template-columns: 56px 200px 1fr;
-    gap: 18px; align-items: baseline;
-    padding: 18px 4px; border-bottom: 1px solid var(--hairline);
+  /* 功能：短句网格，字即是画 */
+  .grid {
+    margin-top: 64px;
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 44px 40px;
+    text-align: center;
   }
-  .track .no { font-family: var(--mono); font-size: 13px; color: var(--violet); }
-  .track .name { font-weight: 600; font-size: 16px; }
-  .track .desc { color: var(--muted); font-size: 15px; }
-  @media (max-width: 640px) {
-    .track { grid-template-columns: 44px 1fr; }
-    .track .desc { grid-column: 2; }
-  }
+  .cell h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .cell p { margin-top: 5px; font-size: 15px; color: var(--muted); }
+  @media (max-width: 720px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 36px 24px; } }
+  @media (max-width: 440px) { .grid { grid-template-columns: 1fr; } }
 
-  /* 安装步骤 */
-  .steps { margin-top: 34px; display: grid; gap: 14px; counter-reset: step; }
+  /* 安装：三行说完 */
+  .steps { max-width: 560px; margin: 56px auto 0; display: grid; gap: 0; }
   .step {
-    background: var(--card); border: 1px solid var(--hairline); border-radius: 16px;
-    padding: 22px 24px 22px 64px; position: relative;
+    display: grid; grid-template-columns: 34px 1fr; gap: 16px;
+    padding: 22px 0; border-bottom: 1px solid var(--hairline);
+    align-items: baseline;
   }
-  .step::before {
-    counter-increment: step; content: counter(step);
-    position: absolute; left: 20px; top: 20px;
-    width: 28px; height: 28px; border-radius: 50%;
-    background: linear-gradient(135deg, #6C5CE7, #A44CF0); color: #fff;
-    font-family: var(--latin); font-weight: 600; font-size: 14px;
-    display: flex; align-items: center; justify-content: center;
+  .step:last-of-type { border-bottom: none; }
+  .step .n { font-size: 15px; font-weight: 600; color: var(--muted); }
+  .step .t { font-size: 17px; }
+  .step .t b { font-weight: 600; }
+  .step code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    background: rgba(0, 0, 0, 0.05);
+    padding: 2px 7px; border-radius: 6px;
+    word-break: break-all;
   }
-  .step h3 { font-size: 16px; font-weight: 600; }
-  .step p { color: var(--muted); font-size: 14.5px; margin-top: 6px; }
-  .step code, .callout code {
-    font-family: var(--mono); font-size: 12.5px;
-    background: #EFEDF6; border-radius: 6px; padding: 2px 7px;
-    color: var(--violet-deep); word-break: break-all;
-  }
-  .step kbd {
-    font-family: var(--body); font-size: 12.5px;
-    background: #EFEDF6; border: 1px solid #DDD9EA; border-bottom-width: 2px;
-    border-radius: 6px; padding: 1px 7px;
+  .footnote {
+    max-width: 560px; margin: 26px auto 0;
+    font-size: 13px; color: var(--muted); text-align: center;
   }
 
-  .callout {
-    margin-top: 18px; padding: 16px 20px;
-    background: #F1EEFB; border-radius: 14px;
-    font-size: 14px; color: #4B4560;
-  }
-
-  /* 反馈 */
-  .feedback-card {
-    margin-top: 30px; background: linear-gradient(150deg, #241E3F, #3A2A6B);
-    color: #EFEBFF; border-radius: 20px; padding: 36px 34px;
-  }
-  .feedback-card h3 { font-size: 20px; font-weight: 700; }
-  .feedback-card p { color: #BBB2DD; font-size: 15px; margin-top: 8px; max-width: 560px; }
-  .feedback-card a.mail {
+  /* 反馈：一句话 */
+  .contact { text-align: center; }
+  .contact .mail {
     display: inline-block; margin-top: 18px;
-    font-family: var(--mono); font-size: 15px;
-    color: #fff; background: rgba(255,255,255,0.12);
-    border: 1px solid rgba(255,255,255,0.22);
-    padding: 10px 18px; border-radius: 12px;
+    font-size: 21px; font-weight: 500;
   }
-  .feedback-card a.mail:hover { background: rgba(255,255,255,0.2); text-decoration: none; }
 
   footer.site {
-    margin-top: 80px; padding: 30px 0 46px;
+    background: var(--alt);
     border-top: 1px solid var(--hairline);
-    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
-    color: var(--muted); font-size: 13.5px;
+    padding: 22px;
+    font-size: 12px; color: var(--muted);
   }
-  footer.site a { color: var(--muted); text-decoration: underline; }
+  footer.site .inner {
+    max-width: 980px; margin: 0 auto;
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+  footer.site a { color: var(--muted); }
 </style>
 </head>
 <body>
 
-<div class="wrap">
-  <header class="site">
-    <a class="brand" href="#"><img src="icon.png" alt="">Echo Player</a>
-    <nav class="top">
+<nav class="site">
+  <div class="inner">
+    <a class="brand" href="#"><img src="icon.png" alt="Echo Player 图标">Echo Player</a>
+    <div class="links">
       <a href="#features">功能</a>
-      <a href="#install">安装教程</a>
-      <a href="#feedback">反馈</a>
+      <a href="#install">安装</a>
+      <a href="#contact">反馈</a>
       <a href="https://github.com/KeikaJames/Echo_Player">GitHub</a>
-    </nav>
+    </div>
+  </div>
+</nav>
+
+<main>
+  <header class="hero">
+    <h1>Echo Player</h1>
+    <p class="tag">歌词，自己出现。</p>
+    <p class="sub">打开一首歌，它自己去找歌词；找不到的，本机 AI 识别。</p>
+    <div class="cta">
+      <a class="pill" id="download-btn" href="https://github.com/KeikaJames/Echo_Player/releases/latest"><span id="download-label">下载</span></a>
+      <small id="download-meta">macOS 26 或更高 · Apple Silicon · 免费开源</small>
+    </div>
   </header>
 
-  <section class="hero">
-    <h1>Echo Player</h1>
-    <p class="zh-sub">打开一首歌，<b>歌词自己出现</b>；打开一部片，<b>字幕自己浮上来</b>。</p>
-    <p class="quiet">没有设置页，没有"请先下载模型"。免费、开源、识别全在你的 Mac 上完成。</p>
-
-    <div class="cta-row">
-      <a class="btn-download" id="download-btn" href="https://github.com/KeikaJames/Echo_Player/releases/latest">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13"/><path d="m6 11 6 6 6-6"/><path d="M5 21h14"/></svg>
-        <span id="download-label">下载最新版</span>
-      </a>
-      <span class="cta-meta" id="download-meta">macOS 26+ · Apple Silicon</span>
+  <div class="stage" aria-hidden="true">
+    <div class="glow-window">
+      <div class="traffic"><i></i><i></i><i></i></div>
+      <p class="lyric-line" data-i="0">雨下了一整晚</p>
+      <p class="lyric-line" data-i="1">街灯把影子拉得好长</p>
+      <p class="lyric-line" data-i="2">我数着几步，能走到你身旁</p>
+      <p class="lyric-line" data-i="3">风停了，歌还在耳边</p>
     </div>
+  </div>
 
-    <div class="stage" aria-hidden="true">
-      <div class="glow-window">
-        <div class="traffic"><i></i><i></i><i></i></div>
-        <p class="lyric-line" data-i="0">打开一首歌</p>
-        <p class="lyric-line" data-i="1">歌词就在这里逐字亮起</p>
-        <p class="lyric-line" data-i="2">光晕跟着鼓点呼吸</p>
-        <p class="lyric-line" data-i="3">这就是 Echo Player</p>
+  <section class="alt" id="features">
+    <div class="inner-narrow">
+      <h2>会做的，都替你做了。</h2>
+      <div class="grid">
+        <div class="cell"><h3>逐字歌词</h3><p>唱到哪个字，亮到哪个字</p></div>
+        <div class="cell"><h3>踩节拍的光晕</h3><p>窗口边缘随鼓点呼吸</p></div>
+        <div class="cell"><h3>视频字幕</h3><p>打开就有，不用找</p></div>
+        <div class="cell"><h3>会议记录</h3><p>谁说的，分得清</p></div>
+        <div class="cell"><h3>全格式</h3><p>mkv、webm、ogg 也照放</p></div>
+        <div class="cell"><h3>全程本机</h3><p>音频不出你的 Mac</p></div>
       </div>
-    </div>
-  </section>
-
-  <section id="features">
-    <p class="eyebrow">Features</p>
-    <h2>它会做的事</h2>
-    <p class="lede">像一张唱片的曲目单——每一条都开箱即用，不需要你配置任何东西。</p>
-    <div class="tracklist">
-      <div class="track"><span class="no">01</span><span class="name">歌词自动来</span><span class="desc">本地 LRC → 在线曲库秒出 → 本机 AI 识别兜底；系统引擎先出草稿，Whisper 后台精修，屏幕永远不空等。</span></div>
-      <div class="track"><span class="no">02</span><span class="name">逐字流动歌词</span><span class="desc">Apple Music 式卡拉 OK：当前行放大、逐词点亮、自动滚动，点任意一行跳转播放，可导出 LRC。</span></div>
-      <div class="track"><span class="no">03</span><span class="name">踩鼓点的光晕</span><span class="desc">窗口边缘的动态光晕按整曲预分析的拍点网格零延迟弹跳，还会洒到窗外；视频时换成画面氛围色。不喜欢可一键关。</span></div>
-      <div class="track"><span class="no">04</span><span class="name">视频也体面</span><span class="desc">原生悬浮控制条、窗口贴合视频分辨率、界面自动隐身、字幕自动识别叠加。</span></div>
-      <div class="track"><span class="no">05</span><span class="name">会议它来记</span><span class="desc">实时字幕浮窗边听边转文字，还能分辨谁在说话——在场几人、每人说了什么，可导出记录与录音。</span></div>
-      <div class="track"><span class="no">06</span><span class="name">格式通吃</span><span class="desc">mp3 / flac / m4a / wav / mp4 / mov 原生播放；mkv / webm / ogg / opus / ape / avi 等经 FFmpeg 解锁。</span></div>
     </div>
   </section>
 
   <section id="install">
-    <p class="eyebrow">Install</p>
-    <h2>安装教程</h2>
-    <p class="lede">Echo Player 是独立开发的开源应用，没有加入 Apple Developer 计划（99 美元/年），所以首次打开需要多点两下——只有第一次，之后的自动更新完全无感。</p>
-    <div class="steps">
-      <div class="step">
-        <h3>下载并解压</h3>
-        <p>点上方「下载最新版」得到 zip，双击解压出 <code>Echo Player.app</code>，把它拖进「应用程序」文件夹。</p>
+    <div class="inner-narrow">
+      <h2>第一次打开，多点两下。</h2>
+      <p class="h2-sub">独立开发，没有 Apple 签名——macOS 会多问一次，只有这一次。</p>
+      <div class="steps">
+        <div class="step"><span class="n">1</span><span class="t">解压后把 Echo Player 拖进「应用程序」。</span></div>
+        <div class="step"><span class="n">2</span><span class="t"><b>右键点它，选「打开」</b>，弹窗里再点一次「打开」。</span></div>
+        <div class="step"><span class="n">3</span><span class="t">还被拦？系统设置 → 隐私与安全性 → 「仍要打开」。或执行 <code>xattr -cr /Applications/Echo\ Player.app</code></span></div>
       </div>
-      <div class="step">
-        <h3>首次打开：右键 → 打开</h3>
-        <p>不要直接双击。<b>右键点击</b>应用图标，选「打开」，在弹窗里再点一次「打开」。这是 macOS 对未签名应用的例行确认。</p>
-      </div>
-      <div class="step">
-        <h3>如果系统仍然拦截</h3>
-        <p>打开 <kbd>系统设置</kbd> → <kbd>隐私与安全性</kbd>，拉到底部找到「已阻止 Echo Player」，点「仍要打开」。或者在终端执行：<code>xattr -cr /Applications/Echo\ Player.app</code></p>
-      </div>
-      <div class="step">
-        <h3>授权麦克风（可选）</h3>
-        <p>只有用「实时字幕 / 会议记录」功能时才会请求麦克风权限；所有识别都在本机完成，音频不会上传。</p>
-      </div>
-    </div>
-    <div class="callout">
-      为什么之后的更新不用再折腾？应用内置更新器：发现新版 → 应用内下载（校验 SHA-256 指纹防篡改）→ 自动替换重启。应用内下载不带隔离标记，Gatekeeper 不会再拦。
+      <p class="footnote">之后的更新在应用内完成（SHA-256 校验），不会再被拦。</p>
     </div>
   </section>
 
-  <section id="feedback">
-    <p class="eyebrow">Feedback</p>
-    <h2>告诉我它哪里不对</h2>
-    <div class="feedback-card">
-      <h3>危险的 bug，或任何建议</h3>
-      <p>崩溃、数据丢失、隐私疑虑这类严重问题请直接写邮件——普通建议和想要的功能也欢迎，每封都会看。</p>
-      <a class="mail" href="mailto:gabira@bayagud.com?subject=%5BEcho%20Player%5D%20">gabira@bayagud.com</a>
-    </div>
+  <section class="alt contact" id="contact">
+    <h2>有 bug，或者有想法？</h2>
+    <a class="mail" href="mailto:gabira@bayagud.com?subject=%5BEcho%20Player%5D%20">gabira@bayagud.com</a>
   </section>
+</main>
 
-  <footer class="site">
-    <span>© 2026 Echo Player · 源码以 <a href="https://github.com/KeikaJames/Echo_Player/blob/main/LICENSE">MIT</a> 发布（二进制含 GPL-3.0 组件）</span>
-    <span><a href="https://github.com/KeikaJames/Echo_Player">GitHub</a> · <a href="https://github.com/KeikaJames/Echo_Player/releases">全部版本</a></span>
-  </footer>
-</div>
+<footer class="site">
+  <div class="inner">
+    <span>© 2026 Echo Player · <a href="https://github.com/KeikaJames/Echo_Player/blob/main/LICENSE">MIT</a>，二进制含 GPL-3.0 组件</span>
+    <span><a href="https://github.com/KeikaJames/Echo_Player/releases">全部版本</a></span>
+  </div>
+</footer>
 
 <script>
-  // 下载按钮永远指向最新 Release 的 zip 资产：页面不用改版本号
+  // 下载按钮永远指向最新版
   (async () => {
     try {
       const res = await fetch("https://api.github.com/repos/KeikaJames/Echo_Player/releases/latest");
       if (!res.ok) return;
       const rel = await res.json();
       const zip = (rel.assets || []).find(a => a.name.toLowerCase().endsWith(".zip"));
-      const label = document.getElementById("download-label");
-      const meta = document.getElementById("download-meta");
-      if (rel.tag_name) label.textContent = `下载 Echo Player ${rel.tag_name}`;
+      if (rel.tag_name) document.getElementById("download-label").textContent = `下载 ${rel.tag_name}`;
       if (zip) {
         document.getElementById("download-btn").href = zip.browser_download_url;
-        const mb = Math.round(zip.size / 1048576);
-        meta.textContent = `macOS 26+ · Apple Silicon · ${mb} MB`;
+        document.getElementById("download-meta").textContent =
+          `macOS 26 或更高 · Apple Silicon · ${Math.round(zip.size / 1048576)} MB · 免费开源`;
       }
-    } catch (_) { /* API 不可达时保持指向 releases 页 */ }
+    } catch (_) { /* 拉不到就保持指向 releases 页 */ }
   })();
 
-  // 歌词逐行逐字点亮（与应用同款节奏）
+  // 歌词逐行点亮
   const lines = [...document.querySelectorAll(".lyric-line")];
-  const durations = [2200, 3200, 3000, 2600];
+  const durations = [2400, 3200, 3400, 2800];
   let idx = 0;
   function playLine() {
     lines.forEach(l => l.classList.remove("now"));
     const line = lines[idx];
     line.style.setProperty("--dur", durations[idx] + "ms");
-    void line.offsetWidth;   // 重启动画
+    void line.offsetWidth;
     line.classList.add("now");
     idx = (idx + 1) % lines.length;
-    setTimeout(playLine, durations[(idx + lines.length - 1) % lines.length] + 500);
+    setTimeout(playLine, durations[(idx + lines.length - 1) % lines.length] + 600);
   }
   if (!matchMedia("(prefers-reduced-motion: reduce)").matches) playLine();
   else lines[1].classList.add("now");
