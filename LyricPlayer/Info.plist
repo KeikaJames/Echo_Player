@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>Echo Player</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Echo Player</string>
+	<key>UpdateRepository</key>
+	<string>KeikaJames/Echo_Player</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.music</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHumanReadableCopyright</key>
+	<string></string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>需要语音识别权限，用于把音频中的歌词或台词自动转换成同步显示的文本。识别在本机进行。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>需要麦克风权限，用于「实时字幕」功能：边听边把周围的语音实时转成文字。音频不会被上传。</string>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<!-- FFmpeg 通路的扩展名多无系统 UTI；声明成 conform 到 public.audio/movie
+		     的导入类型后，才能被下方文档类型接住、出现在 Finder"打开方式"里 -->
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>app.echoplayer.audio-extended</string>
+			<key>UTTypeDescription</key>
+			<string>音频文件</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.audio</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ogg</string>
+					<string>oga</string>
+					<string>opus</string>
+					<string>ape</string>
+					<string>wma</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>app.echoplayer.video-extended</string>
+			<key>UTTypeDescription</key>
+			<string>视频文件</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.movie</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mkv</string>
+					<string>webm</string>
+					<string>flv</string>
+					<string>avi</string>
+					<string>ts</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>媒体文件</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.audio</string>
+				<string>public.movie</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

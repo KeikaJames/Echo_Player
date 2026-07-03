@@ -1,0 +1,8 @@
+.DS_Store
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+# Whisper 模型（465MB）：不进 git（GitHub 单文件 100MB 上限）；
+# 发布时打包在 .app 内，构建者可从 hf 下载后放入此目录
+LyricPlayer/Resources/WhisperModel/
