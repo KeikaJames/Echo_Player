@@ -7,8 +7,14 @@ import AppKit
 enum UpdateChecker {
     /// 更新源：读 Info.plist 的 UpdateRepository 键（"用户名/仓库名"）。
     /// 发布前只需改 Info.plist 那一处，代码不动。
+    /// 调试用覆盖：`defaults write <bundle-id> UpdateRepositoryOverride 某仓库`
+    /// 可在不改包的情况下对沙盒仓库做更新链路端到端测试。
     static var repoSlug: String {
-        (Bundle.main.object(forInfoDictionaryKey: "UpdateRepository") as? String)?
+        if let override = UserDefaults.standard.string(forKey: "UpdateRepositoryOverride"),
+           !override.isEmpty {
+            return override
+        }
+        return (Bundle.main.object(forInfoDictionaryKey: "UpdateRepository") as? String)?
             .trimmingCharacters(in: .whitespaces) ?? ""
     }
 
