@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Echo Player — 歌词，自己出现。</title>
-<meta name="description" content="免费开源的 macOS 播放器：打开一首歌，歌词自己出现；打开一部片，字幕自己浮上来。识别全在本机完成。">
+<meta name="description" content="免费开源的 macOS 播放器：打开一首歌，歌词自己出现。识别全在本机完成。">
 <link rel="icon" href="icon.png">
 <style>
   :root {
@@ -13,7 +13,7 @@
     --ink: #1d1d1f;
     --muted: #6e6e73;
     --hairline: #d2d2d7;
-    --accent: #6e5ce7;
+    --link: #0066cc;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -23,18 +23,34 @@
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro SC", "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
   }
-  a { color: var(--accent); text-decoration: none; }
+  a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+  a:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 6px; }
 
-  /* ── 导航：细、糊、安静 ── */
+  /* ── Keynote 式浮现：模糊 + 上浮，滚动到哪浮现到哪 ── */
+  .reveal {
+    opacity: 0;
+    transform: translateY(28px);
+    filter: blur(12px);
+    transition: opacity 0.9s cubic-bezier(0.2, 0.7, 0.2, 1),
+                transform 0.9s cubic-bezier(0.2, 0.7, 0.2, 1),
+                filter 0.9s cubic-bezier(0.2, 0.7, 0.2, 1);
+    transition-delay: var(--d, 0s);
+    will-change: opacity, transform, filter;
+  }
+  .reveal.in { opacity: 1; transform: none; filter: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; filter: none; transition: none; }
+  }
+
+  /* ── 导航 ── */
   nav.site {
     position: sticky; top: 0; z-index: 10;
     backdrop-filter: saturate(180%) blur(20px);
     -webkit-backdrop-filter: saturate(180%) blur(20px);
-    background: rgba(251, 251, 253, 0.8);
+    background: rgba(251, 251, 253, 0.75);
     border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   }
   nav.site .inner {
@@ -48,47 +64,73 @@
   nav.site .links a { color: rgba(29, 29, 31, 0.72); transition: color 0.2s; }
   nav.site .links a:hover { color: var(--ink); text-decoration: none; }
 
-  /* ── Hero ── */
-  .hero { text-align: center; padding: 96px 22px 0; }
+  /* ── Hero：淡彩氛围垫底，玻璃从中透出 ── */
+  .hero { position: relative; text-align: center; padding: 100px 22px 0; }
+  .ambient {
+    position: absolute; inset: -120px 0 auto; height: 640px;
+    pointer-events: none; z-index: -1;
+    filter: blur(70px); opacity: 0.5;
+  }
+  .ambient i { position: absolute; border-radius: 50%; }
+  .ambient i:nth-child(1) { width: 420px; height: 420px; left: 12%; top: 40px;  background: #bcd9ff; animation: drift1 22s ease-in-out infinite; }
+  .ambient i:nth-child(2) { width: 380px; height: 380px; right: 14%; top: 0;    background: #ffd6e8; animation: drift2 26s ease-in-out infinite; }
+  .ambient i:nth-child(3) { width: 340px; height: 340px; left: 42%; top: 220px; background: #d3f5df; animation: drift3 24s ease-in-out infinite; }
+  @keyframes drift1 { 50% { transform: translate(70px, 40px); } }
+  @keyframes drift2 { 50% { transform: translate(-60px, 60px); } }
+  @keyframes drift3 { 50% { transform: translate(40px, -50px); } }
+  @media (prefers-reduced-motion: reduce) { .ambient i { animation: none; } }
+
   .hero h1 {
     font-size: clamp(48px, 9vw, 88px);
     font-weight: 700;
     letter-spacing: -0.015em;
     line-height: 1.05;
-    text-wrap: balance;
   }
   .hero .tag {
-    margin-top: 14px;
+    margin-top: 12px;
     font-size: clamp(22px, 3.4vw, 30px);
     font-weight: 500;
     letter-spacing: -0.01em;
-    color: var(--ink);
   }
-  .hero .sub {
-    margin-top: 12px;
-    font-size: 17px;
-    color: var(--muted);
-    text-wrap: balance;
-  }
-  .cta { margin-top: 30px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .cta { margin-top: 32px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+
+  /* Liquid Glass 胶囊按钮 */
   .pill {
     display: inline-block;
-    background: var(--accent);
-    color: #fff;
+    color: var(--ink);
     font-size: 17px; font-weight: 500;
-    padding: 11px 24px;
+    padding: 12px 28px;
     border-radius: 980px;
-    transition: transform 0.2s ease, background 0.2s ease;
+    background: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(18px) saturate(180%);
+    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.10),
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+      inset 0 -6px 12px rgba(255, 255, 255, 0.35);
+    transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.3, 1), box-shadow 0.25s;
   }
-  .pill:hover { background: #5d4bd6; text-decoration: none; }
+  .pill:hover {
+    text-decoration: none;
+    transform: translateY(-1px) scale(1.02);
+    box-shadow:
+      0 18px 44px rgba(0, 0, 0, 0.13),
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.6),
+      inset 0 -6px 12px rgba(255, 255, 255, 0.35);
+  }
   .pill:active { transform: scale(0.98); }
+  .pill:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
   .cta small { font-size: 12px; color: var(--muted); }
 
-  /* ── 发光窗口：整页唯一的彩色时刻 ── */
-  .stage { max-width: 620px; margin: 64px auto 0; padding: 0 22px 110px; }
+  /* ── 发光窗口 ── */
+  .stage { max-width: 620px; margin: 66px auto 0; padding: 0 22px 120px; }
   .glow-window {
     position: relative;
-    background: #fff;
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     border-radius: 20px;
     padding: 52px 46px 46px;
     text-align: left;
@@ -130,13 +172,12 @@
     animation: fill var(--dur, 3.2s) linear forwards;
   }
   @keyframes fill { to { background-position: 0% 0; } }
-
   @media (prefers-reduced-motion: reduce) {
     .glow-window::before, .glow-window::after { animation: none; }
     .lyric-line.now { animation: none; background-position: 0% 0; }
   }
 
-  /* ── 章节骨架 ── */
+  /* ── 章节 ── */
   section { padding: 110px 22px; }
   section.alt { background: var(--alt); }
   .inner-narrow { max-width: 980px; margin: 0 auto; }
@@ -147,22 +188,20 @@
     text-align: center;
     text-wrap: balance;
   }
-  .h2-sub { margin-top: 12px; text-align: center; font-size: 17px; color: var(--muted); text-wrap: balance; }
+  .h2-sub { margin-top: 12px; text-align: center; font-size: 17px; color: var(--muted); }
 
-  /* 功能：短句网格，字即是画 */
   .grid {
     margin-top: 64px;
     display: grid; grid-template-columns: repeat(3, 1fr);
-    gap: 44px 40px;
+    gap: 48px 40px;
     text-align: center;
   }
   .cell h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
-  .cell p { margin-top: 5px; font-size: 15px; color: var(--muted); }
+  .cell p { margin-top: 4px; font-size: 15px; color: var(--muted); }
   @media (max-width: 720px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 36px 24px; } }
   @media (max-width: 440px) { .grid { grid-template-columns: 1fr; } }
 
-  /* 安装：三行说完 */
-  .steps { max-width: 560px; margin: 56px auto 0; display: grid; gap: 0; }
+  .steps { max-width: 560px; margin: 52px auto 0; }
   .step {
     display: grid; grid-template-columns: 34px 1fr; gap: 16px;
     padding: 22px 0; border-bottom: 1px solid var(--hairline);
@@ -179,17 +218,10 @@
     padding: 2px 7px; border-radius: 6px;
     word-break: break-all;
   }
-  .footnote {
-    max-width: 560px; margin: 26px auto 0;
-    font-size: 13px; color: var(--muted); text-align: center;
-  }
+  .footnote { margin: 24px auto 0; font-size: 13px; color: var(--muted); text-align: center; }
 
-  /* 反馈：一句话 */
   .contact { text-align: center; }
-  .contact .mail {
-    display: inline-block; margin-top: 18px;
-    font-size: 21px; font-weight: 500;
-  }
+  .contact .mail { display: inline-block; margin-top: 16px; font-size: 21px; font-weight: 500; }
 
   footer.site {
     background: var(--alt);
@@ -220,16 +252,16 @@
 
 <main>
   <header class="hero">
-    <h1>Echo Player</h1>
-    <p class="tag">歌词，自己出现。</p>
-    <p class="sub">打开一首歌，它自己去找歌词；找不到的，本机 AI 识别。</p>
-    <div class="cta">
+    <div class="ambient" aria-hidden="true"><i></i><i></i><i></i></div>
+    <h1 class="reveal">Echo Player</h1>
+    <p class="tag reveal" style="--d:.1s">歌词，自己出现。</p>
+    <div class="cta reveal" style="--d:.22s">
       <a class="pill" id="download-btn" href="https://github.com/KeikaJames/Echo_Player/releases/latest"><span id="download-label">下载</span></a>
-      <small id="download-meta">macOS 26 或更高 · Apple Silicon · 免费开源</small>
+      <small id="download-meta">macOS 26+ · Apple Silicon · 免费开源</small>
     </div>
   </header>
 
-  <div class="stage" aria-hidden="true">
+  <div class="stage reveal" style="--d:.34s" aria-hidden="true">
     <div class="glow-window">
       <div class="traffic"><i></i><i></i><i></i></div>
       <p class="lyric-line" data-i="0">雨下了一整晚</p>
@@ -241,34 +273,34 @@
 
   <section class="alt" id="features">
     <div class="inner-narrow">
-      <h2>会做的，都替你做了。</h2>
+      <h2 class="reveal">会做的，都替你做了。</h2>
       <div class="grid">
-        <div class="cell"><h3>逐字歌词</h3><p>唱到哪个字，亮到哪个字</p></div>
-        <div class="cell"><h3>踩节拍的光晕</h3><p>窗口边缘随鼓点呼吸</p></div>
-        <div class="cell"><h3>视频字幕</h3><p>打开就有，不用找</p></div>
-        <div class="cell"><h3>会议记录</h3><p>谁说的，分得清</p></div>
-        <div class="cell"><h3>全格式</h3><p>mkv、webm、ogg 也照放</p></div>
-        <div class="cell"><h3>全程本机</h3><p>音频不出你的 Mac</p></div>
+        <div class="cell reveal" style="--d:.05s"><h3>逐字歌词</h3><p>唱到哪，亮到哪</p></div>
+        <div class="cell reveal" style="--d:.12s"><h3>踩节拍的光晕</h3><p>随鼓点呼吸</p></div>
+        <div class="cell reveal" style="--d:.19s"><h3>视频字幕</h3><p>打开就有</p></div>
+        <div class="cell reveal" style="--d:.26s"><h3>会议记录</h3><p>谁说的，分得清</p></div>
+        <div class="cell reveal" style="--d:.33s"><h3>全格式</h3><p>mkv、webm 也照放</p></div>
+        <div class="cell reveal" style="--d:.40s"><h3>全程本机</h3><p>音频不出 Mac</p></div>
       </div>
     </div>
   </section>
 
   <section id="install">
     <div class="inner-narrow">
-      <h2>第一次打开，多点两下。</h2>
-      <p class="h2-sub">独立开发，没有 Apple 签名——macOS 会多问一次，只有这一次。</p>
+      <h2 class="reveal">第一次打开，多点两下。</h2>
+      <p class="h2-sub reveal" style="--d:.08s">没有 Apple 签名，macOS 会多问一次。</p>
       <div class="steps">
-        <div class="step"><span class="n">1</span><span class="t">解压后把 Echo Player 拖进「应用程序」。</span></div>
-        <div class="step"><span class="n">2</span><span class="t"><b>右键点它，选「打开」</b>，弹窗里再点一次「打开」。</span></div>
-        <div class="step"><span class="n">3</span><span class="t">还被拦？系统设置 → 隐私与安全性 → 「仍要打开」。或执行 <code>xattr -cr /Applications/Echo\ Player.app</code></span></div>
+        <div class="step reveal" style="--d:.05s"><span class="n">1</span><span class="t">解压，拖进「应用程序」。</span></div>
+        <div class="step reveal" style="--d:.14s"><span class="n">2</span><span class="t"><b>右键 → 打开</b>，再点一次「打开」。</span></div>
+        <div class="step reveal" style="--d:.23s"><span class="n">3</span><span class="t">还被拦？系统设置 → 隐私与安全性 → 「仍要打开」。或 <code>xattr -cr /Applications/Echo\ Player.app</code></span></div>
       </div>
-      <p class="footnote">之后的更新在应用内完成（SHA-256 校验），不会再被拦。</p>
+      <p class="footnote reveal" style="--d:.3s">之后的更新在应用内完成，不再被拦。</p>
     </div>
   </section>
 
   <section class="alt contact" id="contact">
-    <h2>有 bug，或者有想法？</h2>
-    <a class="mail" href="mailto:gabira@bayagud.com?subject=%5BEcho%20Player%5D%20">gabira@bayagud.com</a>
+    <h2 class="reveal">有 bug，或者有想法？</h2>
+    <a class="mail reveal" style="--d:.1s" href="mailto:gabira@bayagud.com?subject=%5BEcho%20Player%5D%20">gabira@bayagud.com</a>
   </section>
 </main>
 
@@ -291,10 +323,18 @@
       if (zip) {
         document.getElementById("download-btn").href = zip.browser_download_url;
         document.getElementById("download-meta").textContent =
-          `macOS 26 或更高 · Apple Silicon · ${Math.round(zip.size / 1048576)} MB · 免费开源`;
+          `macOS 26+ · Apple Silicon · ${Math.round(zip.size / 1048576)} MB · 免费开源`;
       }
-    } catch (_) { /* 拉不到就保持指向 releases 页 */ }
+    } catch (_) {}
   })();
+
+  // Keynote 式浮现：滚动到视口内即触发，各元素错峰
+  const io = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+    }
+  }, { threshold: 0.15, rootMargin: "0px 0px -8% 0px" });
+  document.querySelectorAll(".reveal").forEach(el => io.observe(el));
 
   // 歌词逐行点亮
   const lines = [...document.querySelectorAll(".lyric-line")];
