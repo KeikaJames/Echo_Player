@@ -59,11 +59,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          {
+            echo "SHA256: ${{ steps.package.outputs.sha256 }}"
+            echo ""
+            echo "首次安装请看官网教程（未签名应用需右键→打开）：https://keikajames.github.io/Echo_Player/"
+            echo "已安装用户无需操作——应用会自动提示更新。"
+          } > /tmp/notes.md
           gh release create "$GITHUB_REF_NAME" \
             "${{ steps.package.outputs.zip }}" \
             --title "Echo Player $GITHUB_REF_NAME" \
-            --generate-notes \
-            --notes "SHA256: ${{ steps.package.outputs.sha256 }}
-
-首次安装请看官网教程（未签名应用需右键→打开）：https://keikajames.github.io/Echo_Player/
-已安装用户无需操作——应用会自动提示更新。"
+            --notes-file /tmp/notes.md
