@@ -29,7 +29,7 @@
   a:hover { text-decoration: underline; }
   a:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 6px; }
 
-  /* ── Keynote 式浮现：模糊 + 上浮，滚动到哪浮现到哪 ── */
+  /* ── Keynote 式浮现（用于普通章节） ── */
   .reveal {
     opacity: 0;
     transform: translateY(28px);
@@ -64,8 +64,8 @@
   nav.site .links a { color: rgba(29, 29, 31, 0.72); transition: color 0.2s; }
   nav.site .links a:hover { color: var(--ink); text-decoration: none; }
 
-  /* ── Hero：淡彩氛围垫底，玻璃从中透出 ── */
-  .hero { position: relative; text-align: center; padding: 100px 22px 0; }
+  /* ── Hero ── */
+  .hero { position: relative; text-align: center; padding: 100px 22px 90px; }
   .ambient {
     position: absolute; inset: -120px 0 auto; height: 640px;
     pointer-events: none; z-index: -1;
@@ -86,15 +86,9 @@
     letter-spacing: -0.015em;
     line-height: 1.05;
   }
-  .hero .tag {
-    margin-top: 12px;
-    font-size: clamp(22px, 3.4vw, 30px);
-    font-weight: 500;
-    letter-spacing: -0.01em;
-  }
+  .hero .tag { margin-top: 12px; font-size: clamp(22px, 3.4vw, 30px); font-weight: 500; letter-spacing: -0.01em; }
   .cta { margin-top: 32px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
 
-  /* Liquid Glass 胶囊按钮 */
   .pill {
     display: inline-block;
     color: var(--ink);
@@ -124,89 +118,158 @@
   .pill:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
   .cta small { font-size: 12px; color: var(--muted); }
 
-  /* ── 发光窗口 ── */
-  .stage { max-width: 620px; margin: 66px auto 0; padding: 0 22px 120px; }
-  .glow-window {
-    position: relative;
-    background: rgba(255, 255, 255, 0.82);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-radius: 20px;
-    padding: 52px 46px 46px;
-    text-align: left;
-    box-shadow: 0 30px 70px rgba(0, 0, 0, 0.08);
+  /* ════ 滚动绑定场景：假渲染的 App 界面随滚动组装 ════
+     外层 .scene 高 260vh 提供滚动行程；内层 .scene-pin 吸顶占满一屏。
+     JS 把滚动进度写进 --p，各元素按自己负责的进度区间运动。 */
+  .scene { position: relative; height: 260vh; }
+  .scene-pin {
+    position: sticky; top: 0;
+    height: 100svh; min-height: 560px;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
   }
-  .glow-window::before, .glow-window::after {
-    content: ""; position: absolute; inset: -2px; border-radius: 22px;
-    padding: 2px;
+
+  .mock {
+    --p: 0;
+    position: relative;
+    width: min(760px, 92vw);
+    aspect-ratio: 760 / 480;
+    border-radius: 14px;
+    background: linear-gradient(165deg, #fdfdfe, #f4f2fa);
+    box-shadow: 0 40px 90px rgba(0, 0, 0, 0.16);
+    overflow: hidden;
+    font-size: clamp(9px, 1.7vw, 14px);
+  }
+  /* 边缘光晕：强度由 JS 写入 --glow */
+  .mock-glow {
+    position: absolute; inset: -3px; border-radius: 17px; padding: 3px;
     background: conic-gradient(from var(--sweep, 0deg),
       #ff5f6d, #ffc371, #7ee081, #4bc0ff, #8a5cf6, #f45cc1, #ff5f6d);
     -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
     -webkit-mask-composite: xor; mask-composite: exclude;
     animation: sweep 16s linear infinite;
+    opacity: var(--glow, 0.2);
+    pointer-events: none;
   }
-  .glow-window::after {
-    inset: -5px; border-radius: 25px; padding: 6px;
-    filter: blur(16px); opacity: 0.5;
-    animation: sweep 16s linear infinite, breathe 3.6s ease-in-out infinite;
+  .mock-halo {
+    position: absolute; inset: -14px; border-radius: 26px; padding: 14px;
+    background: conic-gradient(from var(--sweep, 0deg),
+      #ff5f6d, #ffc371, #7ee081, #4bc0ff, #8a5cf6, #f45cc1, #ff5f6d);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    filter: blur(18px);
+    animation: sweep 16s linear infinite;
+    opacity: calc(var(--glow, 0.2) * 0.6);
+    pointer-events: none;
   }
   @property --sweep { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
   @keyframes sweep { to { --sweep: 360deg; } }
-  @keyframes breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.28; } }
 
-  .traffic { display: flex; gap: 7px; position: absolute; top: 18px; left: 18px; }
-  .traffic i { width: 11px; height: 11px; border-radius: 50%; background: #e8e8ed; }
+  .mock .traffic { display: flex; gap: 6px; position: absolute; top: 14px; left: 14px; z-index: 3; }
+  .mock .traffic i { width: 10px; height: 10px; border-radius: 50%; }
+  .mock .traffic i:nth-child(1) { background: #ff5f57; }
+  .mock .traffic i:nth-child(2) { background: #febc2e; }
+  .mock .traffic i:nth-child(3) { background: #28c840; }
 
-  .lyric-line {
-    font-size: 21px; font-weight: 600; letter-spacing: 0.01em;
-    color: #d2d2d7;
-    margin: 15px 0;
+  .mock-body { position: absolute; inset: 0; display: flex; }
+
+  /* 侧栏（SwiftUI NavigationSplitView 的观感） */
+  .mock-side {
+    width: 27%;
+    background: rgba(246, 245, 250, 0.9);
+    border-right: 1px solid rgba(0, 0, 0, 0.06);
+    padding: 12% 4% 4%;
   }
-  .lyric-line.now {
-    font-size: 26px;
-    background: linear-gradient(90deg, var(--ink) 50%, #d2d2d7 50%);
+  .mock-side .cap { font-size: 0.72em; color: var(--muted); font-weight: 600; padding: 0 8%; }
+  .mock-side .row {
+    margin-top: 5%; padding: 5% 8%;
+    border-radius: 0.6em;
+    font-size: 0.92em;
+    color: rgba(29, 29, 31, 0.85);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mock-side .row small { display: block; font-size: 0.76em; color: var(--muted); }
+  .mock-side .row.on { background: rgba(0, 0, 0, 0.055); font-weight: 600; }
+
+  /* 主区：封面 + 歌词 */
+  .mock-main { flex: 1; display: flex; align-items: center; gap: 6%; padding: 6% 7%; }
+  .mock-cover {
+    width: 27%; aspect-ratio: 1; border-radius: 0.9em;
+    background: linear-gradient(140deg, #ffb37b, #f06292 55%, #7e57c2);
+    box-shadow: 0 1em 2.4em rgba(0, 0, 0, 0.22);
+    flex-shrink: 0;
+    position: relative;
+  }
+  .mock-cover::after {
+    content: "雨停之前"; position: absolute; left: 0; right: 0; bottom: -2.4em;
+    text-align: center; font-size: 0.86em; font-weight: 600; color: var(--ink);
+  }
+  .mock-lyrics { flex: 1; min-width: 0; }
+  .mock-lyrics .ln {
+    font-weight: 600;
+    font-size: 1.08em;
+    color: #cfcfd6;
+    margin: 0.72em 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: font-size 0.3s ease;
+  }
+  .mock-lyrics .ln.now {
+    font-size: 1.38em;
+    background: linear-gradient(90deg, var(--ink) 50%, #cfcfd6 50%);
     background-size: 205% 100%;
-    background-position: 100% 0;
+    background-position: calc(100% - var(--fill, 0) * 100%) 0;   /* 填充度由 JS 按滚动写入 */
     -webkit-background-clip: text; background-clip: text;
     color: transparent;
-    animation: fill var(--dur, 3.2s) linear forwards;
   }
-  @keyframes fill { to { background-position: 0% 0; } }
+
+  /* 悬浮玻璃控制条 */
+  .mock-bar {
+    position: absolute; left: 50%; bottom: 5%;
+    transform: translateX(-50%);
+    display: flex; align-items: center; gap: 1em;
+    padding: 0.7em 1.3em;
+    border-radius: 99em;
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(14px) saturate(160%);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    box-shadow: 0 0.6em 1.8em rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+  .mock-bar svg { width: 1.05em; height: 1.05em; fill: var(--ink); display: block; }
+  .mock-bar .track { width: 11em; height: 0.32em; border-radius: 1em; background: rgba(0, 0, 0, 0.12); position: relative; }
+  .mock-bar .track i {
+    position: absolute; inset: 0 auto 0 0; width: calc(var(--played, 0) * 100%);
+    border-radius: 1em; background: var(--ink);
+  }
+
+  /* 场景内的字幕：跟着进度换文案 */
+  .scene-cap {
+    position: absolute; left: 50%; bottom: max(4vh, 26px); transform: translateX(-50%);
+    font-size: 15px; color: var(--muted); white-space: nowrap;
+    opacity: 0; transition: opacity 0.4s;
+  }
+  .scene-cap.show { opacity: 1; }
+
   @media (prefers-reduced-motion: reduce) {
-    .glow-window::before, .glow-window::after { animation: none; }
-    .lyric-line.now { animation: none; background-position: 0% 0; }
+    .scene { height: auto; }
+    .scene-pin { position: static; height: auto; padding: 90px 0; }
+    .mock-glow, .mock-halo { animation: none; opacity: 0.85; }
   }
 
   /* ── 章节 ── */
   section { padding: 110px 22px; }
   section.alt { background: var(--alt); }
   .inner-narrow { max-width: 980px; margin: 0 auto; }
-  h2 {
-    font-size: clamp(32px, 5vw, 48px);
-    font-weight: 600;
-    letter-spacing: -0.012em;
-    text-align: center;
-    text-wrap: balance;
-  }
+  h2 { font-size: clamp(32px, 5vw, 48px); font-weight: 600; letter-spacing: -0.012em; text-align: center; text-wrap: balance; }
   .h2-sub { margin-top: 12px; text-align: center; font-size: 17px; color: var(--muted); }
 
-  .grid {
-    margin-top: 64px;
-    display: grid; grid-template-columns: repeat(3, 1fr);
-    gap: 48px 40px;
-    text-align: center;
-  }
+  .grid { margin-top: 64px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px 40px; text-align: center; }
   .cell h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
   .cell p { margin-top: 4px; font-size: 15px; color: var(--muted); }
   @media (max-width: 720px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 36px 24px; } }
   @media (max-width: 440px) { .grid { grid-template-columns: 1fr; } }
 
   .steps { max-width: 560px; margin: 52px auto 0; }
-  .step {
-    display: grid; grid-template-columns: 34px 1fr; gap: 16px;
-    padding: 22px 0; border-bottom: 1px solid var(--hairline);
-    align-items: baseline;
-  }
+  .step { display: grid; grid-template-columns: 34px 1fr; gap: 16px; padding: 22px 0; border-bottom: 1px solid var(--hairline); align-items: baseline; }
   .step:last-of-type { border-bottom: none; }
   .step .n { font-size: 15px; font-weight: 600; color: var(--muted); }
   .step .t { font-size: 17px; }
@@ -223,16 +286,8 @@
   .contact { text-align: center; }
   .contact .mail { display: inline-block; margin-top: 16px; font-size: 21px; font-weight: 500; }
 
-  footer.site {
-    background: var(--alt);
-    border-top: 1px solid var(--hairline);
-    padding: 22px;
-    font-size: 12px; color: var(--muted);
-  }
-  footer.site .inner {
-    max-width: 980px; margin: 0 auto;
-    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
-  }
+  footer.site { background: var(--alt); border-top: 1px solid var(--hairline); padding: 22px; font-size: 12px; color: var(--muted); }
+  footer.site .inner { max-width: 980px; margin: 0 auto; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
   footer.site a { color: var(--muted); }
 </style>
 </head>
@@ -261,13 +316,40 @@
     </div>
   </header>
 
-  <div class="stage reveal" style="--d:.34s" aria-hidden="true">
-    <div class="glow-window">
-      <div class="traffic"><i></i><i></i><i></i></div>
-      <p class="lyric-line" data-i="0">雨下了一整晚</p>
-      <p class="lyric-line" data-i="1">街灯把影子拉得好长</p>
-      <p class="lyric-line" data-i="2">我数着几步，能走到你身旁</p>
-      <p class="lyric-line" data-i="3">风停了，歌还在耳边</p>
+  <!-- 滚动绑定场景：往下滚，界面自己组装起来（回滚会倒放） -->
+  <div class="scene" id="scene" aria-hidden="true">
+    <div class="scene-pin">
+      <div class="mock" id="mock">
+        <div class="mock-halo"></div>
+        <div class="mock-glow"></div>
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <div class="mock-body">
+          <aside class="mock-side" id="mockSide">
+            <div class="cap">播放列表</div>
+            <div class="row on">雨停之前<small>林晚</small></div>
+            <div class="row">环形公路<small>白屿</small></div>
+            <div class="row">回声练习曲<small>Echo Lab</small></div>
+            <div class="row">午夜信号<small>林晚</small></div>
+          </aside>
+          <div class="mock-main">
+            <div class="mock-cover"></div>
+            <div class="mock-lyrics" id="mockLyrics">
+              <p class="ln">雨下了一整晚</p>
+              <p class="ln">街灯把影子拉得好长</p>
+              <p class="ln">我数着几步，能走到你身旁</p>
+              <p class="ln">风停了，歌还在耳边</p>
+              <p class="ln">天亮之前，再听一遍</p>
+            </div>
+          </div>
+        </div>
+        <div class="mock-bar" id="mockBar">
+          <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zM20 6l-10 6 10 6z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg>
+          <svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM4 6l10 6-10 6z"/></svg>
+          <div class="track"><i id="mockPlayed"></i></div>
+        </div>
+      </div>
+      <p class="scene-cap" id="sceneCap">往下滚动</p>
     </div>
   </div>
 
@@ -328,7 +410,7 @@
     } catch (_) {}
   })();
 
-  // Keynote 式浮现：滚动到视口内即触发，各元素错峰
+  // Keynote 式浮现（普通章节）
   const io = new IntersectionObserver(entries => {
     for (const e of entries) {
       if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
@@ -336,21 +418,80 @@
   }, { threshold: 0.15, rootMargin: "0px 0px -8% 0px" });
   document.querySelectorAll(".reveal").forEach(el => io.observe(el));
 
-  // 歌词逐行点亮
-  const lines = [...document.querySelectorAll(".lyric-line")];
-  const durations = [2400, 3200, 3400, 2800];
-  let idx = 0;
-  function playLine() {
-    lines.forEach(l => l.classList.remove("now"));
-    const line = lines[idx];
-    line.style.setProperty("--dur", durations[idx] + "ms");
-    void line.offsetWidth;
-    line.classList.add("now");
-    idx = (idx + 1) % lines.length;
-    setTimeout(playLine, durations[(idx + lines.length - 1) % lines.length] + 600);
+  /* ════ 滚动绑定：滚动进度 p ∈ [0,1] 驱动整个场景 ════
+     seg(p,a,b) 把全局进度裁剪成某元素自己的 0→1 区间；
+     ease 让每段运动有 Apple 那种"重而顺"的减速感。 */
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const scene = document.getElementById("scene");
+  const mock = document.getElementById("mock");
+  const side = document.getElementById("mockSide");
+  const bar = document.getElementById("mockBar");
+  const played = document.getElementById("mockPlayed");
+  const cap = document.getElementById("sceneCap");
+  const lns = [...document.querySelectorAll("#mockLyrics .ln")];
+
+  const seg = (p, a, b) => Math.min(1, Math.max(0, (p - a) / (b - a)));
+  const ease = t => 1 - Math.pow(1 - t, 3);   // easeOutCubic
+
+  function render(p) {
+    // 1) 窗口落定：上浮 + 放大 + 去模糊（0 → 0.22）
+    const e1 = ease(seg(p, 0, 0.22));
+    mock.style.transform = `translateY(${(1 - e1) * 90}px) scale(${0.86 + 0.14 * e1})`;
+    mock.style.filter = `blur(${(1 - e1) * 16}px)`;
+    mock.style.opacity = 0.2 + 0.8 * e1;
+
+    // 2) 侧栏滑入（0.16 → 0.32）、控制条升起（0.22 → 0.38）
+    const e2 = ease(seg(p, 0.16, 0.32));
+    side.style.transform = `translateX(${(1 - e2) * -30}px)`;
+    side.style.opacity = e2;
+    const e3 = ease(seg(p, 0.22, 0.38));
+    bar.style.transform = `translateX(-50%) translateY(${(1 - e3) * 26}px)`;
+    bar.style.opacity = e3;
+
+    // 3) 歌词逐行随滚动点亮（0.34 → 0.92），当前行放大
+    const L = lns.length, t0 = 0.34, t1 = 0.92, span = (t1 - t0) / L;
+    lns.forEach((ln, i) => {
+      const fill = seg(p, t0 + i * span, t0 + (i + 1) * span);
+      const isNow = fill > 0 && fill < 1 || (i === L - 1 && fill >= 1) || (fill >= 1 && seg(p, t0 + (i + 1) * span, t0 + (i + 2) * span) === 0);
+      ln.classList.toggle("now", fill > 0 && (fill < 1 || i === L - 1));
+      ln.style.setProperty("--fill", fill.toFixed(3));
+      if (fill >= 1 && i < L - 1) { ln.classList.remove("now"); ln.style.color = "#8e8e93"; }
+      else if (fill === 0) { ln.style.color = ""; }
+    });
+
+    // 4) 光晕强度、进度条跟随全局进度
+    mock.style.setProperty("--glow", (0.15 + 0.85 * ease(seg(p, 0.3, 0.8))).toFixed(3));
+    played.style.setProperty("--played", seg(p, 0.34, 0.92).toFixed(3));
+
+    // 5) 底部字幕分段换词
+    const texts = [[0, "往下滚动"], [0.24, "打开一首歌"], [0.4, "歌词跟着你滚到哪，亮到哪"], [0.86, "这就是 Echo Player"]];
+    let text = texts[0][1];
+    for (const [at, s] of texts) if (p >= at) text = s;
+    cap.textContent = text;
+    cap.classList.toggle("show", p > 0.02 && p < 0.98);
   }
-  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) playLine();
-  else lines[1].classList.add("now");
+
+  if (!reduceMotion) {
+    let ticking = false;
+    const onScroll = () => {
+      if (window.__freezeScene) return;   // 调试：控制台置 true 后可手动 render(p) 查看任意进度
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const total = scene.offsetHeight - innerHeight;
+        const p = seg(-scene.getBoundingClientRect().top / total, 0, 1);
+        render(p);
+        ticking = false;
+      });
+    };
+    addEventListener("scroll", onScroll, { passive: true });
+    addEventListener("resize", onScroll, { passive: true });
+    render(0);
+    onScroll();
+  } else {
+    render(1);   // 减弱动态：直接展示组装完成的界面
+    cap.classList.remove("show");
+  }
 </script>
 
 </body>
