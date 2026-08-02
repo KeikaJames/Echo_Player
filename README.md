@@ -30,11 +30,13 @@ Apple Music 的流动歌词很美，但它只属于曲库里的歌。Echo Player
 
 **逐字点亮。** Apple Music 式卡拉 OK 渲染：当前行放大、逐词浮现、自动居中滚动；点任意一行跳转播放，手动翻看 4 秒后自动归位。识别结果可一键导出 LRC（⇧⌘E）。
 
+**双语随时开。** 歌词、视频字幕和实时字幕都能保留原文并显示系统翻译，目标语言列表直接跟随 macOS，系统新增语言后无需更新 App。实时字幕使用低延迟翻译，已经定稿的歌词按行处理，时间轴不会被改写。
+
 **光会呼吸。** 窗口边缘是 Apple Intelligence 风格的动态光晕——七色 HSB 漂移、三层呼吸描边，并且**踩在鼓点上**：曲目加载时后台预分析整首歌的拍点网格（谱通量算法，vDSP 加速），播放时零延迟按网格弹跳，还会洒到窗口轮廓之外。视频播放时光晕改用画面边缘的实时氛围色。嫌闹？工具栏 ⋯ 里一键关。
 
 **视频同样体面。** 原生悬浮控制条（QuickTime 手感）、窗口自动贴合视频分辨率（无黑边）、不可避免的留边用模糊画面填充、鼠标停两秒界面自动隐身、字幕自动识别叠加。
 
-**开会它来记。** ⇧⌘K 唤出实时字幕浮窗：边听边转文字，还能**分辨谁在说话**——pyannote 分割 + WeSpeaker 声纹聚类，在场几个人、每人说了什么，一目了然。支持导出记录（.txt）与录音（.wav）。
+**开会它来记。** ⇧⌘K 唤出实时字幕浮窗：边听边转文字，还能**分辨谁在说话**——pyannote 分割 + WeSpeaker 声纹聚类，在场几个人、每人说了什么，一目了然。Apple Intelligence 可在本机把长会议分段整理成概述、要点、决定、待办和章节；支持导出记录（.txt）与录音（.wav）。
 
 **格式通吃。**
 
@@ -50,7 +52,8 @@ Apple Music 的流动歌词很美，但它只属于曲库里的歌。Echo Player
 
 - Whisper small 模型（约 465 MB）**内置在安装包里**，说话人分离模型（13 MB）同样内置——首次启动没有任何下载。
 - 所有语音识别强制本机执行，**音频从不离开你的 Mac**。
-- 唯一的网络请求是向 LRCLIB 查歌词（只发送标题/艺人/时长元数据）和检查更新（GitHub Releases）。没有遥测。
+- 双语翻译与会议摘要同样在本机处理；首次使用某个翻译语言时，macOS 可能提示下载对应语言包。
+- App 自己发起的网络请求只有 LRCLIB 歌词查询（标题/艺人/时长）和 GitHub Releases 更新检查。App 没有遥测；系统翻译可能下载语言包，并由 Apple 收集不含原文或译文的 API 使用和性能信息。
 
 ## 快捷键
 
@@ -89,7 +92,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 | `Models/EnginePlayer` | AVAudioEngine 播放内核：变速不变调、实时电平 tap |
 | `Models/VideoBackend` `FFmpegBackend` | 原生视频 / FFmpeg 双后端，统一 `PlaybackBackend` 协议 |
 | `Models/BeatDetector` | 谱通量鼓点检测 + 整曲离线拍点网格（热路径零堆分配） |
-| `Transcription/` | 歌词管线：LRCLIB → 系统流式识别 → Whisper 精修；实时字幕 + 说话人分离 |
+| `Transcription/` | 歌词管线：LRCLIB → 系统流式识别 → Whisper 精修；实时字幕、说话人分离、系统翻译与会议摘要 |
 | `Views/AuroraBackground` | 边缘光晕（移植自 AppleIntelligenceForSwiftUI）与氛围背景 |
 | `Views/GlowHalo` | 窗外光环：跟随主窗的透明子窗口 |
 
@@ -99,6 +102,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 - 极端嘈杂或人声极少的音频可能识别不到（会明确提示，不装死）
 - FFmpeg 通路格式暂无拍点光晕、氛围采样与歌词自动识别
 - 实时字幕跟随系统语言
+- 会议摘要需要系统已开启 Apple Intelligence；不可用时不影响转写、翻译和播放
 
 ## 致谢
 

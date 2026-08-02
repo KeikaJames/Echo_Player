@@ -80,9 +80,15 @@ final class PlayerModel {
     }
 
     // MARK: - 歌词状态
-    var lyricLines: [LyricLine] = []
+    var lyricLines: [LyricLine] = [] {
+        didSet { lyricsRevision &+= 1 }
+    }
+    private(set) var lyricsRevision = 0
     var lyricsStatus: LyricsStatus = .idle
     var currentLineIndex: Int?
+    var translatedLyrics: [UUID: String] = [:]
+    var lyricsTranslationState: BilingualTranslationState = .idle
+    var lyricsTranslationTarget: String?
 
     var currentTrack: Track? {
         currentTrackID.flatMap { id in playlist.first { $0.id == id } }
@@ -311,6 +317,7 @@ final class PlayerModel {
             isPlaying = false
             cancelTranscription()
             lyricLines = []
+            clearLyricsTranslation()
             currentLineIndex = nil
             lyricsStatus = .failed("无法播放「\(track.title)」：文件已损坏或格式不受支持")
             consecutiveLoadFailures += 1
@@ -388,6 +395,7 @@ final class PlayerModel {
         currentTrackID = nil
         cancelTranscription()
         lyricLines = []
+        clearLyricsTranslation()
         lyricsStatus = .idle
         currentLineIndex = nil
         updateNowPlayingInfo()
@@ -510,10 +518,17 @@ final class PlayerModel {
         transcriptionTask = nil
     }
 
+    func clearLyricsTranslation() {
+        translatedLyrics.removeAll()
+        lyricsTranslationState = .idle
+        lyricsTranslationTarget = nil
+    }
+
     /// 打开曲目后自动执行：LRC 文件 → 缓存 → 自动识别。
     func startLyricsPipeline(forceRecognize: Bool) {
         cancelTranscription()
         lyricLines = []
+        clearLyricsTranslation()
         currentLineIndex = nil
         lyricsStatus = .idle
 

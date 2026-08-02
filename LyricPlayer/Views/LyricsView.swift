@@ -4,6 +4,7 @@ import SwiftUI
 /// 自动居中滚动；用户手动滚动时暂停跟随，稍后自动恢复。
 struct LyricsView: View {
     @Environment(PlayerModel.self) private var model
+    @Environment(TranslationSettings.self) private var translationSettings
     @State private var autoScroll = true
     @State private var resumeTask: Task<Void, Never>?
 
@@ -16,6 +17,42 @@ struct LyricsView: View {
             }
         }
         .padding(.trailing, 8)
+        .overlay(alignment: .topTrailing) { translationControl }
+    }
+
+    // MARK: - 双语歌词
+
+    private var translationControl: some View {
+        @Bindable var settings = translationSettings
+        return HStack(spacing: 7) {
+            if model.lyricsTranslationState == .translating {
+                ProgressView().controlSize(.small)
+            }
+            Menu {
+                Toggle("显示双语歌词", isOn: $settings.lyricsEnabled)
+                Picker("译为", selection: $settings.targetIdentifier) {
+                    ForEach(settings.supportedLanguages) { language in
+                        Text(language.name).tag(language.id)
+                    }
+                }
+                if case .failed(let message) = model.lyricsTranslationState {
+                    Divider()
+                    Text(message)
+                }
+            } label: {
+                Label(settings.lyricsEnabled ? "双语 · \(settings.targetName)" : "双语歌词",
+                      systemImage: "character.bubble")
+            }
+            .buttonStyle(.glass)
+            .controlSize(.small)
+            .help(translationHelp)
+        }
+        .padding(14)
+    }
+
+    private var translationHelp: String {
+        if case .failed(let message) = model.lyricsTranslationState { return message }
+        return translationSettings.lyricsEnabled ? "关闭双语歌词" : "使用系统翻译显示双语歌词"
     }
 
     // MARK: - 歌词滚动区
@@ -155,6 +192,7 @@ struct LyricsView: View {
 
 private struct LyricLineRow: View {
     @Environment(PlayerModel.self) private var model
+    @Environment(TranslationSettings.self) private var translationSettings
     let line: LyricLine
     let index: Int
     @State private var isHovered = false
@@ -166,15 +204,25 @@ private struct LyricLineRow: View {
             model.seek(to: line.start)
             model.resume()
         } label: {
-            Group {
-                if isCurrent && line.hasWordTiming {
-                    KaraokeLineText(line: line)
-                } else {
-                    Text(line.text)
-                        .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.35))
+            VStack(alignment: .leading, spacing: 6) {
+                Group {
+                    if isCurrent && line.hasWordTiming {
+                        KaraokeLineText(line: line)
+                    } else {
+                        Text(line.text)
+                            .foregroundStyle(isCurrent ? Color.primary : Color.primary.opacity(0.35))
+                    }
+                }
+                .font(.system(size: isCurrent ? 28 : 24, weight: .bold, design: .rounded))
+
+                if translationSettings.lyricsEnabled,
+                   model.lyricsTranslationTarget == translationSettings.targetIdentifier,
+                   let translated = model.translatedLyrics[line.id] {
+                    Text(translated)
+                        .font(.system(size: isCurrent ? 18 : 16, weight: .medium, design: .rounded))
+                        .foregroundStyle(isCurrent ? Color.primary.opacity(0.7) : Color.primary.opacity(0.25))
                 }
             }
-            .font(.system(size: isCurrent ? 28 : 24, weight: .bold, design: .rounded))
             .multilineTextAlignment(.leading)
             .lineSpacing(5)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -192,8 +240,15 @@ private struct LyricLineRow: View {
         }
         .scaleEffect(isCurrent ? 1.0 : 0.94, anchor: .leading)
         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: isCurrent)
-        .accessibilityLabel(line.text)
+        .accessibilityLabel(accessibilityText)
         .help("点按跳转到 \(TimeFormatter.string(from: line.start))")
+    }
+
+    private var accessibilityText: String {
+        guard translationSettings.lyricsEnabled,
+              model.lyricsTranslationTarget == translationSettings.targetIdentifier,
+              let translated = model.translatedLyrics[line.id] else { return line.text }
+        return "\(line.text)，\(translated)"
     }
 }
 

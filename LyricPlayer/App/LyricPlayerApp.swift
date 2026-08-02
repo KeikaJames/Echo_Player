@@ -5,11 +5,13 @@ import AppKit
 struct LyricPlayerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = PlayerModel.shared
+    @State private var translationSettings = TranslationSettings.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(model)
+                .environment(translationSettings)
                 .frame(minWidth: 980, minHeight: 620)
         }
         .defaultSize(width: 1240, height: 780)
@@ -22,6 +24,7 @@ struct LyricPlayerApp: App {
         Window("实时字幕", id: "live-captions") {
             LiveCaptionsView()
                 .environment(model)
+                .environment(translationSettings)
         }
         .defaultSize(width: 760, height: 380)
         .windowStyle(.hiddenTitleBar)   // 玻璃直通到顶（比手动改 styleMask 可靠，SwiftUI 不会回改）
