@@ -1,13 +1,11 @@
 import Foundation
 import AVFoundation
 import AppKit
-import QuickLookThumbnailing
-import UniformTypeIdentifiers
 
 /// 播放列表中的一首曲目。
 struct Track: Identifiable, Hashable {
     let id = UUID()
-    var url: URL
+    let url: URL
     var title: String
     var artist: String = ""
     var duration: Double = 0
@@ -33,22 +31,33 @@ struct Track: Identifiable, Hashable {
     /// 支持的视频扩展名（AVFoundation 原生解码）。
     static let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
 
-    static let supportedContentTypes: [UTType] = [
-        UTType(importedAs: "app.echoplayer.audio"),
-        UTType(importedAs: "app.echoplayer.video"),
+    /// 需 FFmpeg（KSPlayer）软解的扩展名全集——AVFoundation 打不开的容器/编码。
+    static let ffmpegExtensions: Set<String> = [
+        "mkv", "webm", "ogg", "oga", "opus", "ape", "wma", "flv", "avi", "ts"
     ]
 
+    /// FFmpeg 集合里“带画面”的那部分（决定走视频舞台而非纯音频界面）。
+    static let ffmpegVideoExtensions: Set<String> = ["mkv", "webm", "flv", "avi", "ts"]
+
+    /// 该曲目是否需要走 FFmpeg 后端。
+    var needsFFmpeg: Bool { Self.ffmpegExtensions.contains(url.pathExtension.lowercased()) }
+
     var isVideo: Bool {
-        Self.videoExtensions.contains(url.pathExtension.lowercased())
+        let ext = url.pathExtension.lowercased()
+        return Self.videoExtensions.contains(ext) || Self.ffmpegVideoExtensions.contains(ext)
     }
 
     static func isMediaFile(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         return audioExtensions.contains(ext) || videoExtensions.contains(ext)
+            || ffmpegExtensions.contains(ext)
     }
 
     static func isAudioFile(_ url: URL) -> Bool {
-        audioExtensions.contains(url.pathExtension.lowercased())
+        let ext = url.pathExtension.lowercased()
+        // FFmpeg 集合里非视频的部分（ogg/oga/opus/ape/wma）算作音频
+        return audioExtensions.contains(ext)
+            || (ffmpegExtensions.contains(ext) && !ffmpegVideoExtensions.contains(ext))
     }
 
     /// 异步读取元数据（标题 / 艺人 / 时长 / 封面）。
@@ -59,42 +68,39 @@ struct Track: Identifiable, Hashable {
         var artworkData: Data?
     }
 
-    static func loadMetadata(from url: URL, includeArtwork: Bool = false) async -> Metadata {
+    static func loadMetadata(from url: URL) async -> Metadata {
         let asset = AVURLAsset(url: url)
         var meta = Metadata(title: nil, artist: nil, duration: 0, artworkData: nil)
 
-        guard !Task.isCancelled else { return meta }
         if let duration = try? await asset.load(.duration) {
             meta.duration = duration.seconds.isFinite ? duration.seconds : 0
         }
-        guard !Task.isCancelled else { return meta }
-        if let items = try? await asset.load(.commonMetadata) {
-            let titleItems = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: .commonIdentifierTitle)
-            if let item = titleItems.first, let value = try? await item.load(.stringValue) {
-                meta.title = String(value.prefix(500))
-            }
-            let artistItems = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: .commonIdentifierArtist)
-            if let item = artistItems.first, let value = try? await item.load(.stringValue) {
-                meta.artist = String(value.prefix(500))
-            }
+        guard let items = try? await asset.load(.commonMetadata) else { return meta }
+
+        let titleItems = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: .commonIdentifierTitle)
+        if let item = titleItems.first, let value = try? await item.load(.stringValue) {
+            meta.title = value
+        }
+        let artistItems = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: .commonIdentifierArtist)
+        if let item = artistItems.first, let value = try? await item.load(.stringValue) {
+            meta.artist = value
+        }
+        let artItems = AVMetadataItem.metadataItems(from: items, filteredByIdentifier: .commonIdentifierArtwork)
+        if let item = artItems.first, let data = try? await item.load(.dataValue) {
+            meta.artworkData = data
         }
 
-        if includeArtwork, !Task.isCancelled {
-            meta.artworkData = await thumbnailData(for: url)
+        // 视频没有封面时取 20% 处的画面帧作缩略图
+        if meta.artworkData == nil, videoExtensions.contains(url.pathExtension.lowercased()) {
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 800, height: 800)
+            let at = CMTime(seconds: max(1, meta.duration * 0.2), preferredTimescale: 600)
+            if let cgImage = try? await generator.image(at: at).image {
+                let rep = NSBitmapImageRep(cgImage: cgImage)
+                meta.artworkData = rep.representation(using: .png, properties: [:])
+            }
         }
         return meta
-    }
-
-    private static func thumbnailData(for url: URL) async -> Data? {
-        let request = QLThumbnailGenerator.Request(fileAt: url,
-                                                   size: CGSize(width: 800, height: 800),
-                                                   scale: 1,
-                                                   representationTypes: .thumbnail)
-        guard let thumbnail = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) else {
-            return nil
-        }
-        let image = thumbnail.cgImage
-        guard image.width <= 800, image.height <= 800 else { return nil }
-        return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }
 }

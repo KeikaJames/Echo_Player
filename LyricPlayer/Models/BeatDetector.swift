@@ -188,7 +188,7 @@ final class BeatDetector {
 /// 播放时按网格查表触发光晕弹跳——零检测延迟、零抖动（Superpowered 的离线分析思路）。
 enum BeatGrid {
     static func analyze(url: URL) async -> [Double] {
-        let worker = Task.detached(priority: .utility) { () -> [Double] in
+        await Task.detached(priority: .utility) { () -> [Double] in
             guard let file = try? AVAudioFile(forReading: url),
                   file.processingFormat.sampleRate > 0 else { return [] }
             let detector = BeatDetector(sampleRate: file.processingFormat.sampleRate)
@@ -206,11 +206,6 @@ enum BeatGrid {
                 }
             }
             return onsets
-        }
-        return await withTaskCancellationHandler {
-            await worker.value
-        } onCancel: {
-            worker.cancel()
-        }
+        }.value
     }
 }

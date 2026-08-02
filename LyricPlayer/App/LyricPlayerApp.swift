@@ -45,7 +45,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        removeMigratedWhisperModels()
         PlayerModel.shared.restoreState()
         UpdateChecker.autoCheck()
         GlowHaloController.shared.enabled = PlayerModel.shared.glowEnabled
@@ -77,23 +76,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 andEventID: AEEventID(kAEOpenDocuments)
             )
         }
-    }
-
-    private func removeMigratedWhisperModels() {
-        guard let resources = Bundle.main.resourceURL,
-              FileManager.default.fileExists(
-                atPath: resources.appendingPathComponent(
-                    "WhisperModel/openai_whisper-small/MelSpectrogram.mlmodelc"
-                ).path
-              ),
-              FileManager.default.fileExists(
-                atPath: resources.appendingPathComponent("WhisperTokenizer/tokenizer.json").path
-              ),
-              let support = FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask
-              ).first else { return }
-        let oldModels = support.appendingPathComponent("LyricPlayer/WhisperModels", isDirectory: true)
-        try? FileManager.default.removeItem(at: oldModels)
     }
 
     // MARK: - 打开文件
@@ -128,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 退出与关窗
 
     func applicationWillTerminate(_ notification: Notification) {
-        PlayerModel.shared.prepareForTermination()
+        PlayerModel.shared.saveState()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -182,11 +164,6 @@ struct PlayerCommands: Commands {
             Button(model.showLyrics ? "隐藏歌词" : "显示歌词") { model.showLyrics.toggle() }
                 .keyboardShortcut("l", modifiers: .command)
 
-            Toggle("允许在线查找歌词", isOn: Binding(
-                get: { model.allowOnlineLyrics },
-                set: { model.allowOnlineLyrics = $0 }
-            ))
-
             Button("实时字幕（麦克风）…") { openWindow(id: "live-captions") }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
 
@@ -199,10 +176,6 @@ struct PlayerCommands: Commands {
             Button("导出歌词为 LRC…") { model.exportLRC() }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(model.lyricLines.isEmpty)
-
-            Divider()
-
-            Button("清除识别缓存…") { model.clearTranscriptCache() }
         }
     }
 }

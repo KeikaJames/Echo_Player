@@ -14,11 +14,8 @@ typealias TranscriptionUpdateHandler = @Sendable (TranscriptionSnapshot) -> Void
 enum TranscriptionError: LocalizedError {
     case notAuthorized
     case unsupportedLocale(String)
-    case onDeviceRecognitionUnavailable
     case recognizerUnavailable
-    case modelUnavailable
     case cannotReadAudio
-    case audioTooLong
 
     var errorDescription: String? {
         switch self {
@@ -26,16 +23,10 @@ enum TranscriptionError: LocalizedError {
             return "未获得语音识别权限。请在「系统设置 › 隐私与安全性 › 语音识别」中允许本 App。"
         case .unsupportedLocale(let id):
             return "系统语音识别不支持当前语言（\(id)）。"
-        case .onDeviceRecognitionUnavailable:
-            return "当前语言没有可用的本地语音识别模型，已停止以避免上传音频。"
         case .recognizerUnavailable:
             return "语音识别服务暂时不可用，请稍后重试。"
-        case .modelUnavailable:
-            return "本地语音模型不完整，请重新安装 Echo Player。"
         case .cannotReadAudio:
             return "无法读取该音频文件。"
-        case .audioTooLong:
-            return "深度识别仅支持 60 分钟以内的音频。"
         }
     }
 }
@@ -48,7 +39,8 @@ enum TranscriptionError: LocalizedError {
 ///    语言由模型直接从音频检测，无需任何人工选择。
 enum AutoTranscriber {
     static func transcribe(url: URL, onUpdate: @escaping TranscriptionUpdateHandler) async throws -> [LyricLine] {
-        // 识别管线全程依赖 AVAudioFile/AVAudioEngine；无法读取的格式直接返回。
+        // FFmpeg 专属格式（mkv/webm/opus/ape/wma…）AVAudioFile 打不开：识别管线
+        // 全程依赖 AVAudioFile/AVAudioEngine，这里直接返回空，避免崩溃或卡死。
         guard (try? AVAudioFile(forReading: url)) != nil else { return [] }
 
         let locale = systemLocale()

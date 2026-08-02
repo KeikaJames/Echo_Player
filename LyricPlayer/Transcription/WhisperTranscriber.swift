@@ -14,7 +14,6 @@ import WhisperKit
 enum WhisperTranscriber {
     /// 固定使用 small 模型：中文及多语种质量/速度的平衡点。
     private static let modelName = "small"
-    private static let maxAudioSeconds = 60.0 * 60
 
     /// 常驻的推理管线：模型加载较慢，跨曲目复用。
     /// - single-flight：并发调用共享同一次加载，快速切歌时不会同时初始化两份 500MB 模型；
@@ -24,8 +23,13 @@ enum WhisperTranscriber {
     private static var loadingTask: Task<WhisperKit, Error>?
     private static var pressureSource: DispatchSourceMemoryPressure?
 
+    /// 模型存放目录。也支持手动下载模型放到这里离线使用（见 README）。
+    static var modelsRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("LyricPlayer/WhisperModels", isDirectory: true)
+    }
+
     static func transcribe(url: URL, duration: Double, onUpdate: @escaping TranscriptionUpdateHandler) async throws -> [LyricLine] {
-        guard duration > 0, duration <= maxAudioSeconds else { throw TranscriptionError.audioTooLong }
         let whisper = try await loadPipeline(onUpdate: onUpdate)
         try Task.checkCancellation()
 
@@ -142,7 +146,7 @@ enum WhisperTranscriber {
         return text.range(of: #"^[\[\(【（].*[\]\)】）]$"#, options: .regularExpression) != nil
     }
 
-    // MARK: - 模型加载
+    // MARK: - 模型加载 / 下载
 
     private static func loadPipeline(onUpdate: @escaping TranscriptionUpdateHandler) async throws -> WhisperKit {
         if let cached = pipelineLock.withLock({ cachedPipeline }) { return cached }
@@ -169,26 +173,45 @@ enum WhisperTranscriber {
     }
 
     private static func doLoadPipeline(onUpdate: @escaping TranscriptionUpdateHandler) async throws -> WhisperKit {
-        guard let bundled = Bundle.main.resourceURL?
+        // 候选目录按优先级：手动放置 > App 内置 > 之前自动下载。
+        // 只探测单个文件是否存在不够——目录可能半损坏（下载中断/用户误删），
+        // 所以初始化失败就跳到下一个候选，全灭后走下载自愈。
+        var candidates: [URL] = []
+        let manual = modelsRoot.appendingPathComponent(modelName, isDirectory: true)
+        if FileManager.default.fileExists(atPath: manual.appendingPathComponent("MelSpectrogram.mlmodelc").path) {
+            candidates.append(manual)
+        }
+        if let bundled = Bundle.main.resourceURL?
             .appendingPathComponent("WhisperModel/openai_whisper-\(modelName)", isDirectory: true),
-              FileManager.default.fileExists(atPath: bundled.appendingPathComponent("MelSpectrogram.mlmodelc").path) else {
-            throw TranscriptionError.modelUnavailable
+           FileManager.default.fileExists(atPath: bundled.appendingPathComponent("MelSpectrogram.mlmodelc").path) {
+            candidates.append(bundled)
         }
-        guard let tokenizer = Bundle.main.resourceURL?
-            .appendingPathComponent("WhisperTokenizer", isDirectory: true),
-              FileManager.default.fileExists(atPath: tokenizer.appendingPathComponent("tokenizer.json").path),
-              FileManager.default.fileExists(atPath: tokenizer.appendingPathComponent("tokenizer_config.json").path) else {
-            throw TranscriptionError.modelUnavailable
+        let auto = modelsRoot.appendingPathComponent("models/argmaxinc/whisperkit-coreml/openai_whisper-\(modelName)", isDirectory: true)
+        if FileManager.default.fileExists(atPath: auto.appendingPathComponent("MelSpectrogram.mlmodelc").path) {
+            candidates.append(auto)
         }
-        do {
-            onUpdate(TranscriptionSnapshot(lines: [], fraction: nil, message: "正在准备歌词…"))
-            return try await WhisperKit(WhisperKitConfig(modelFolder: bundled.path,
-                                                         tokenizerFolder: tokenizer,
-                                                         download: false))
-        } catch {
-            NSLog("内置语音模型不可用：\(error.localizedDescription)")
-            throw TranscriptionError.modelUnavailable
+
+        for candidate in candidates {
+            do {
+                onUpdate(TranscriptionSnapshot(lines: [], fraction: nil, message: "正在准备歌词…"))
+                return try await WhisperKit(WhisperKitConfig(modelFolder: candidate.path))
+            } catch {
+                NSLog("语音模型目录不可用（\(candidate.lastPathComponent)），尝试下一来源：\(error.localizedDescription)")
+            }
         }
+
+        // 全部候选失效 → 重新下载（带进度）
+        let gate = ProgressGate()
+        let downloadMessage = "正在下载语音模型（约 500 MB，仅首次）…"
+        onUpdate(TranscriptionSnapshot(lines: [], fraction: 0, message: downloadMessage))
+        let folder = try await WhisperKit.download(variant: modelName, downloadBase: modelsRoot) { progress in
+            let fraction = progress.fractionCompleted
+            if gate.shouldReport(fraction) {
+                onUpdate(TranscriptionSnapshot(lines: [], fraction: fraction, message: downloadMessage))
+            }
+        }
+        onUpdate(TranscriptionSnapshot(lines: [], fraction: nil, message: "正在准备歌词…"))
+        return try await WhisperKit(WhisperKitConfig(modelFolder: folder.path))
     }
 
     /// 内存吃紧时放掉常驻模型（约 0.6-1GB RSS），下次识别时重新加载。

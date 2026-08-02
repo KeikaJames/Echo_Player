@@ -8,10 +8,16 @@ struct VideoStage: View {
 
     var body: some View {
         ZStack {
-            // 环境垫层：同源画面放大填满 + 高斯模糊——
-            // 窗口/全屏比例和视频对不上时，露出的不是黑边而是画面的模糊延伸
-            BlurredVideoBackdrop(player: model.videoPlayer)
-            NativeVideoPlayer(player: model.videoPlayer)
+            if model.currentTrack?.needsFFmpeg == true {
+                // FFmpeg（KSPlayer）画面：无模糊垫层，纯黑底 + 铺满的原生渲染视图
+                Color.black
+                FFmpegVideoView(view: model.ffmpegPlayerView)
+            } else {
+                // 环境垫层：同源画面放大填满 + 高斯模糊——
+                // 窗口/全屏比例和视频对不上时，露出的不是黑边而是画面的模糊延伸
+                BlurredVideoBackdrop(player: model.videoPlayer)
+                NativeVideoPlayer(player: model.videoPlayer)
+            }
 
             if model.showLyrics {
                 subtitleOverlay
@@ -82,6 +88,35 @@ struct NativeVideoPlayer: NSViewRepresentable {
         if view.player !== player {
             view.player = player
         }
+    }
+}
+
+/// FFmpeg（KSPlayer）画面容器：把 KSMEPlayer 自带的渲染 NSView 作为子视图铺满。
+/// 换曲时底层 view 会变（新的 KSMEPlayer 实例），这里检测到不同就替换子视图；
+/// 画面比例由 KSPlayer 的 contentMode(.scaleAspectFit) 负责，容器只管填满。
+struct FFmpegVideoView: NSViewRepresentable {
+    let view: NSView?
+
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.black.cgColor
+        return container
+    }
+
+    func updateNSView(_ container: NSView, context: Context) {
+        let current = container.subviews.first
+        if current === view { return }
+        current?.removeFromSuperview()
+        guard let view else { return }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            view.topAnchor.constraint(equalTo: container.topAnchor),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
     }
 }
 

@@ -229,11 +229,12 @@ final class LiveCaptionSession {
                 try? await Task.sleep(for: .seconds(interval))
                 guard let self, self.currentGeneration() == gen else { return }
 
+                self.diarLock.lock()
                 // 显式深拷贝：直接赋值是 COW 共享，下一次 tap 追加时会在音频回调里
                 // 触发整缓冲（最大 57MB）的隐式拷贝；在这里拷则 tap 最多短暂等锁
-                let (samples, offset) = self.diarLock.withLock {
-                    (self.diarAudio.withUnsafeBufferPointer { Array($0) }, self.diarTrimmedSeconds)
-                }
+                let samples = self.diarAudio.withUnsafeBufferPointer { Array($0) }
+                let offset = self.diarTrimmedSeconds
+                self.diarLock.unlock()
 
                 let bufferSeconds = Double(samples.count) / Self.diarSampleRate
                 // 全量重聚类的代价随缓冲线性涨：间隔随之拉大（15 分钟缓冲 ≈ 45s 一轮），
@@ -277,21 +278,9 @@ final class LiveCaptionSession {
     // MARK: - 文本操作
 
     func clear() {
-        let shouldRestart = isListening
-        if shouldRestart { stop() }
         entries.removeAll()
         volatileText = ""
         statusText = ""
-        speakerCount = 0
-        speakerOrder.removeAll()
-        diarLock.lock()
-        diarAudio.withUnsafeMutableBufferPointer { buffer in
-            for index in buffer.indices { buffer[index] = 0 }
-        }
-        diarAudio.removeAll(keepingCapacity: false)
-        diarTrimmedSeconds = 0
-        diarLock.unlock()
-        if shouldRestart { start() }
     }
 
     var transcriptText: String {
@@ -327,9 +316,9 @@ final class LiveCaptionSession {
 
     /// 导出本次会话的录音（16kHz 单声道 WAV）。
     func saveRecording() {
-        let samples = diarLock.withLock {
-            diarAudio.withUnsafeBufferPointer { Array($0) }
-        }
+        diarLock.lock()
+        let samples = diarAudio
+        diarLock.unlock()
         guard !samples.isEmpty else { return }
 
         let panel = NSSavePanel()
@@ -458,10 +447,10 @@ final class LiveCaptionSession {
         }
 
         // 重置会话音频缓冲（说话人状态属 UI，在下面的主线程提交段重置）
-        diarLock.withLock {
-            diarAudio.removeAll()
-            diarTrimmedSeconds = 0
-        }
+        diarLock.lock()
+        diarAudio.removeAll()
+        diarTrimmedSeconds = 0
+        diarLock.unlock()
 
         let backend = ModernLiveBackend(analyzer: analyzer, inputBuilder: inputBuilder)
         backend.resultsTask = Task { [weak self] in
@@ -555,9 +544,6 @@ final class LiveCaptionSession {
               recognizer.isAvailable else {
             throw TranscriptionError.recognizerUnavailable
         }
-        guard recognizer.supportsOnDeviceRecognition else {
-            throw TranscriptionError.onDeviceRecognitionUnavailable
-        }
         legacyRecognizer = recognizer
 
         let inputNode = audioEngine.inputNode
@@ -588,7 +574,7 @@ final class LiveCaptionSession {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
+        request.requiresOnDeviceRecognition = true  // 音频永不出本机
         request.taskHint = .dictation
         if #available(macOS 13.0, *) { request.addsPunctuation = true }
         genLock.withLock { legacyRequest = request }
@@ -628,20 +614,17 @@ final class LiveCaptionSession {
 
 #if canImport(FluidAudio)
 /// 说话人分离工作器：串行执行、独占非 Sendable 的 DiarizerManager。
-/// 模型（pyannote 分割 + WeSpeaker 声纹）随应用分发，缺失时优雅降级（字幕无说话人标注）。
+/// 模型（pyannote 分割 + WeSpeaker 声纹）首次使用时自动下载，失败则优雅降级（字幕无说话人标注）。
 actor DiarizationWorker {
     static let shared = DiarizationWorker()
 
     private var diarizer: DiarizerManager?
     private var loadFailed = false
-    private var resetPending = false
-    private var inferenceTask: Task<DiarizationResult?, Never>?
 
     /// 新聆听会话开始时调用：给模型加载再一次机会
     /// （否则一次瞬时失败会闩死到进程退出，整场会议都没有说话人标注）。
     func resetFailureLatch() {
         loadFailed = false
-        resetPending = true
     }
 
     /// 内置模型（随安装包分发，约 13MB）：开箱即用，永不下载。
@@ -666,12 +649,14 @@ actor DiarizationWorker {
     }
 
     func diarize(_ samples: [Float], offset: Double) async -> [(speakerId: String, start: Double, end: Double)]? {
-        guard inferenceTask == nil else { return nil }
         if diarizer == nil {
             guard !loadFailed else { return nil }
             do {
-                guard let models = try Self.loadBundledModels() else {
-                    throw TranscriptionError.recognizerUnavailable
+                let models: DiarizerModels
+                if let bundled = (try? Self.loadBundledModels()) ?? nil {
+                    models = bundled
+                } else {
+                    models = try await DiarizerModels.downloadIfNeeded()
                 }
                 let manager = DiarizerManager()
                 manager.initialize(models: models)
@@ -683,22 +668,20 @@ actor DiarizationWorker {
             }
         }
         guard let diarizer else { return nil }
-        if resetPending {
-            diarizer.speakerManager.reset()
-            resetPending = false
-        }
-        // 新会话可能在上一轮推理收尾前开始；只允许一个 detached 任务访问 manager。
-        let task = Task.detached(priority: .utility) {
-            try? diarizer.performCompleteDiarization(samples)
-        }
-        inferenceTask = task
-        let result = await task.value
-        inferenceTask = nil
-        guard let result else { return nil }
-        return result.segments.map {
-            (speakerId: $0.speakerId,
-             start: Double($0.startTimeSeconds) + offset,
-             end: Double($0.endTimeSeconds) + offset)
+        do {
+            // 聚类可长达数秒-数十秒：放 detached 避免钉死协作线程池的线程；
+            // actor 的 await 串行化保证 diarizer 仍是独占访问
+            let result = try await Task.detached(priority: .utility) {
+                try diarizer.performCompleteDiarization(samples)
+            }.value
+            return result.segments.map {
+                (speakerId: $0.speakerId,
+                 start: Double($0.startTimeSeconds) + offset,
+                 end: Double($0.endTimeSeconds) + offset)
+            }
+        } catch {
+            NSLog("说话人分离失败：\(error.localizedDescription)")
+            return nil
         }
     }
 }

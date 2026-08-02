@@ -11,16 +11,11 @@ enum TranscriptCache {
     }
 
     private static let currentVersion = 2
-    private static let maxEntryBytes = 8 * 1024 * 1024
-    private static let maxCacheBytes = 100 * 1024 * 1024
-    private static let maxAge: TimeInterval = 90 * 24 * 3600
 
     private static var directory: URL? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         let dir = base.appendingPathComponent("LyricPlayer/Transcripts", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
@@ -37,10 +32,7 @@ enum TranscriptCache {
 
     static func load(for audioURL: URL, localeID: String) -> (lines: [LyricLine], source: LyricsSource)? {
         guard let url = cacheURL(for: audioURL, localeID: localeID),
-              let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
-              let fileSize = values.fileSize, fileSize <= maxEntryBytes,
-              let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-              data.count <= maxEntryBytes,
+              let data = try? Data(contentsOf: url),
               let entry = try? JSONDecoder().decode(Entry.self, from: data),
               entry.version == currentVersion else { return nil }
         return (entry.lines, entry.source)
@@ -50,11 +42,8 @@ enum TranscriptCache {
     static func save(lines: [LyricLine], source: LyricsSource, for audioURL: URL, localeID: String) {
         guard let url = cacheURL(for: audioURL, localeID: localeID),
               let data = try? JSONEncoder().encode(Entry(version: currentVersion, localeID: localeID,
-                                                         source: source, lines: lines)),
-              data.count <= maxEntryBytes else { return }
+                                                         source: source, lines: lines)) else { return }
         try? data.write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        pruneIfNeeded()
     }
 
     static func remove(for audioURL: URL, localeID: String) {
@@ -65,33 +54,5 @@ enum TranscriptCache {
     static func removeAll() {
         guard let dir = directory else { return }
         try? FileManager.default.removeItem(at: dir)
-    }
-
-    private static func pruneIfNeeded() {
-        guard let dir = directory,
-              let files = try? FileManager.default.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-              ) else { return }
-
-        let cutoff = Date().addingTimeInterval(-maxAge)
-        var entries: [(url: URL, size: Int, date: Date)] = []
-        for file in files {
-            guard let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { continue }
-            let date = values.contentModificationDate ?? .distantPast
-            if date < cutoff {
-                try? FileManager.default.removeItem(at: file)
-            } else {
-                entries.append((file, values.fileSize ?? 0, date))
-            }
-        }
-
-        var total = entries.reduce(0) { $0 + $1.size }
-        guard total > maxCacheBytes else { return }
-        for entry in entries.sorted(by: { $0.date < $1.date }) where total > maxCacheBytes {
-            if (try? FileManager.default.removeItem(at: entry.url)) != nil {
-                total -= entry.size
-            }
-        }
     }
 }

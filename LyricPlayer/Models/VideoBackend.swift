@@ -67,18 +67,22 @@ final class VideoBackend: PlaybackBackend {
         player.volume = volume
         duration = 0
 
-        Task { @MainActor [weak self] in
+        Task { [weak self] in
             if let d = try? await item.asset.load(.duration).seconds, d.isFinite {
-                guard let self, self.player.currentItem === item else { return }
-                self.duration = d
+                await MainActor.run {
+                    guard let self, self.player.currentItem === item else { return }
+                    self.duration = d
+                }
             }
             // 自然尺寸（含旋转）→ 窗口宽高比绑定
             if let track = try? await item.asset.loadTracks(withMediaType: .video).first,
                let (size, transform) = try? await track.load(.naturalSize, .preferredTransform) {
                 let r = CGRect(origin: .zero, size: size).applying(transform)
                 let display = CGSize(width: abs(r.width), height: abs(r.height))
-                guard let self, self.player.currentItem === item else { return }
-                self.onVideoSize?(display)
+                await MainActor.run {
+                    guard let self, self.player.currentItem === item else { return }
+                    self.onVideoSize?(display)
+                }
             }
         }
 
