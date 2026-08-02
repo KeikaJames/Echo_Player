@@ -36,11 +36,9 @@
 	<string>需要麦克风权限，用于「实时字幕」功能：边听边把周围的语音实时转成文字。音频不会被上传。</string>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
-		<!-- FFmpeg 通路的扩展名多无系统 UTI；声明成 conform 到 public.audio/movie
-		     的导入类型后，才能被下方文档类型接住、出现在 Finder"打开方式"里 -->
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>app.echoplayer.audio-extended</string>
+			<string>app.echoplayer.audio</string>
 			<key>UTTypeDescription</key>
 			<string>音频文件</string>
 			<key>UTTypeConformsTo</key>
@@ -51,17 +49,26 @@
 			<dict>
 				<key>public.filename-extension</key>
 				<array>
-					<string>ogg</string>
-					<string>oga</string>
-					<string>opus</string>
-					<string>ape</string>
-					<string>wma</string>
+					<string>mp3</string>
+					<string>m4a</string>
+					<string>m4b</string>
+					<string>aac</string>
+					<string>wav</string>
+					<string>aif</string>
+					<string>aiff</string>
+					<string>aifc</string>
+					<string>caf</string>
+					<string>flac</string>
+					<string>ac3</string>
+					<string>au</string>
+					<string>snd</string>
+					<string>amr</string>
 				</array>
 			</dict>
 		</dict>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>app.echoplayer.video-extended</string>
+			<string>app.echoplayer.video</string>
 			<key>UTTypeDescription</key>
 			<string>视频文件</string>
 			<key>UTTypeConformsTo</key>
@@ -72,11 +79,26 @@
 			<dict>
 				<key>public.filename-extension</key>
 				<array>
-					<string>mkv</string>
-					<string>webm</string>
-					<string>flv</string>
-					<string>avi</string>
-					<string>ts</string>
+					<string>mp4</string>
+					<string>mov</string>
+					<string>m4v</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>app.echoplayer.lrc</string>
+			<key>UTTypeDescription</key>
+			<string>LRC 歌词</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.text</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>lrc</string>
 				</array>
 			</dict>
 		</dict>
@@ -92,9 +114,23 @@
 			<string>Alternate</string>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>public.audio</string>
-				<string>public.movie</string>
+				<string>app.echoplayer.audio</string>
+				<string>app.echoplayer.video</string>
 			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>LRC 歌词</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>None</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>app.echoplayer.lrc</string>
+			</array>
+			<key>NSIsRelatedItemType</key>
+			<true/>
 		</dict>
 	</array>
 </dict>

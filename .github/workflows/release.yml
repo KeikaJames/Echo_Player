@@ -2,14 +2,13 @@
 #
 #   git tag v1.1 && git push origin v1.1
 #
-# 产物：Echo.Player.<tag>.zip（内含 Echo Player.app），发布说明自动附带
-# SHA256 指纹——应用内更新器下载后会比对这个指纹，防篡改/防传错。
+# 产物：Echo.Player.<tag>.zip（内含 Echo Player.app），发布说明自动附带 SHA256 指纹。
 #
 # 说明：
 # - 构建需要 Xcode 26（macOS 26 SDK）。若 GitHub 托管 runner 尚未提供该镜像，
 #   此工作流会失败——届时在本机跑 scripts 里同样的四步，手动 `gh release create` 即可。
-# - Whisper 模型（约 465MB）会在 CI 里从 Hugging Face 拉取后打进包（开箱即用）；
-#   拉取失败不阻塞发版，应用会在首次深度识别时自行下载。
+# - Whisper 模型（约 465MB）从固定的 Hugging Face revision 拉取后打进包；
+#   模型缺失或校验失败会直接阻止发版。
 name: Release
 
 on:
@@ -23,49 +22,105 @@ jobs:
   build-release:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: 验证版本标签
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "非法版本标签：$RELEASE_TAG" >&2
+            exit 1
+          fi
 
       - name: 选择 Xcode
         run: |
           sudo xcode-select -s /Applications/Xcode_26.app || sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
 
-      - name: 内置 Whisper 模型（失败不阻塞）
-        continue-on-error: true
+      - name: 内置 Whisper 模型
+        env:
+          MODEL_REVISION: 97a5bf9bbc74c7d9c12c755d04dea59e672e3808
+          TOKENIZER_REVISION: 973afd24965f72e36ca33b3055d56a652f456b4d
         run: |
-          pip3 install -q "huggingface_hub[cli]"
-          hf download argmaxinc/whisperkit-coreml \
-            --include "openai_whisper-small/*" \
-            --local-dir /tmp/whisper
+          MODEL_ROOT="$RUNNER_TEMP/whisperkit-coreml"
+          TOKENIZER_ROOT="$RUNNER_TEMP/whisper-small"
+          GIT_LFS_SKIP_SMUDGE=1 git clone --no-checkout \
+            https://huggingface.co/argmaxinc/whisperkit-coreml "$MODEL_ROOT"
+          git -C "$MODEL_ROOT" fetch --depth 1 origin "$MODEL_REVISION"
+          GIT_LFS_SKIP_SMUDGE=1 git -C "$MODEL_ROOT" checkout --detach FETCH_HEAD
+          git -C "$MODEL_ROOT" lfs pull --include "openai_whisper-small/**" --exclude ""
+          checked=0
+          while IFS=' ' read -r oid marker path; do
+            if [[ "$marker" != "*" ]]; then
+              echo "LFS 文件未完整下载：$path" >&2
+              exit 1
+            fi
+            actual=$(shasum -a 256 "$MODEL_ROOT/$path" | cut -d' ' -f1)
+            if [[ "$actual" != "$oid" ]]; then
+              echo "LFS 文件校验失败：$path" >&2
+              exit 1
+            fi
+            checked=$((checked + 1))
+          done < <(git -C "$MODEL_ROOT" lfs ls-files --long --include "openai_whisper-small/**")
+          test "$checked" -gt 0
+          test -f "$MODEL_ROOT/openai_whisper-small/MelSpectrogram.mlmodelc/coremldata.bin"
+          GIT_LFS_SKIP_SMUDGE=1 git clone --filter=blob:none --no-checkout \
+            https://huggingface.co/openai/whisper-small "$TOKENIZER_ROOT"
+          git -C "$TOKENIZER_ROOT" fetch --depth 1 origin "$TOKENIZER_REVISION"
+          GIT_LFS_SKIP_SMUDGE=1 git -C "$TOKENIZER_ROOT" checkout --detach FETCH_HEAD
+          git -C "$TOKENIZER_ROOT" fsck --strict
+          test -f "$TOKENIZER_ROOT/tokenizer.json"
+          test -f "$TOKENIZER_ROOT/tokenizer_config.json"
+          jq empty "$TOKENIZER_ROOT/tokenizer.json" "$TOKENIZER_ROOT/tokenizer_config.json"
           mkdir -p "LyricPlayer/Resources/WhisperModel"
-          mv /tmp/whisper/openai_whisper-small "LyricPlayer/Resources/WhisperModel/"
+          mv "$MODEL_ROOT/openai_whisper-small" "LyricPlayer/Resources/WhisperModel/"
+          mkdir -p "LyricPlayer/Resources/WhisperTokenizer"
+          cp "$TOKENIZER_ROOT/tokenizer.json" "$TOKENIZER_ROOT/tokenizer_config.json" \
+            "LyricPlayer/Resources/WhisperTokenizer/"
 
       - name: 构建 Release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          APP_VERSION="${RELEASE_TAG#v}"
           xcodebuild -project LyricPlayer.xcodeproj -scheme LyricPlayer \
-            -configuration Release -derivedDataPath build build
+            -configuration Release -derivedDataPath build \
+            -onlyUsePackageVersionsFromResolvedFile \
+            MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" build
+          APP_PLIST="build/Build/Products/Release/LyricPlayer.app/Contents/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PLIST")" = "$APP_VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PLIST")" = "$GITHUB_RUN_NUMBER"
 
       - name: 打包 + 指纹
         id: package
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           cd build/Build/Products/Release
           mv LyricPlayer.app "Echo Player.app"
-          ditto -c -k --keepParent "Echo Player.app" "Echo.Player.${GITHUB_REF_NAME}.zip"
-          HASH=$(shasum -a 256 "Echo.Player.${GITHUB_REF_NAME}.zip" | cut -d' ' -f1)
-          echo "sha256=$HASH" >> "$GITHUB_OUTPUT"
-          echo "zip=build/Build/Products/Release/Echo.Player.${GITHUB_REF_NAME}.zip" >> "$GITHUB_OUTPUT"
+          ZIP_NAME="Echo.Player.${RELEASE_TAG}.zip"
+          ditto -c -k --keepParent "Echo Player.app" "$ZIP_NAME"
+          HASH=$(shasum -a 256 "$ZIP_NAME" | cut -d' ' -f1)
+          printf 'sha256=%s\n' "$HASH" >> "$GITHUB_OUTPUT"
+          printf 'zip=%s\n' "build/Build/Products/Release/$ZIP_NAME" >> "$GITHUB_OUTPUT"
 
       - name: 发布 Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_ZIP: ${{ steps.package.outputs.zip }}
+          RELEASE_SHA256: ${{ steps.package.outputs.sha256 }}
         run: |
           {
-            echo "SHA256: ${{ steps.package.outputs.sha256 }}"
+            echo "SHA256: $RELEASE_SHA256"
             echo ""
             echo "首次安装请看官网教程（未签名应用需右键→打开）：https://keikajames.github.io/Echo_Player/"
-            echo "已安装用户无需操作——应用会自动提示更新。"
+            echo "已安装用户会收到新版本提示，并前往本页手动下载。"
           } > /tmp/notes.md
-          gh release create "$GITHUB_REF_NAME" \
-            "${{ steps.package.outputs.zip }}" \
-            --title "Echo Player $GITHUB_REF_NAME" \
+          gh release create "$RELEASE_TAG" \
+            "$RELEASE_ZIP" \
+            --title "Echo Player $RELEASE_TAG" \
             --notes-file /tmp/notes.md

@@ -21,13 +21,14 @@ struct LyricsView: View {
     // MARK: - 歌词滚动区
 
     private var lyricsScroll: some View {
-        ScrollViewReader { proxy in
+        let lines = model.lyricLines
+        return ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: 10) {
                     // 顶部留白，让第一行也能滚到视线高度
                     Color.clear.frame(height: 180)
 
-                    ForEach(Array(model.lyricLines.enumerated()), id: \.element.id) { index, line in
+                    ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                         LyricLineRow(line: line, index: index)
                             .id(line.id)
                     }

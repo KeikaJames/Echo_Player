@@ -5,6 +5,14 @@ import AVFoundation
 /// 相比 AVPlayer 的关键能力：在混音节点上安装 tap，实时取得音量电平，
 /// 用于驱动动态背景与 Siri 式边缘光晕；变速经 AVAudioUnitTimePitch，不变调。
 final class EnginePlayer {
+    private enum PlayerError: LocalizedError {
+        case fileTooLong
+
+        var errorDescription: String? {
+            "音频时长超过播放内核支持的上限。"
+        }
+    }
+
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
     private let timePitch = AVAudioUnitTimePitch()
@@ -62,6 +70,7 @@ final class EnginePlayer {
 
     func load(url: URL) throws {
         let audioFile = try AVAudioFile(forReading: url)
+        guard audioFile.length <= Int64(UInt32.max) else { throw PlayerError.fileTooLong }
         stopNodeQuietly()
         engine.stop()
 
@@ -180,7 +189,9 @@ final class EnginePlayer {
         guard let file else { return }
         let sampleRate = file.processingFormat.sampleRate
         let startFrame = AVAudioFramePosition(max(0, min(seconds, duration)) * sampleRate)
-        let remaining = AVAudioFrameCount(max(0, file.length - startFrame))
+        let remainingFrames = max(0, file.length - startFrame)
+        guard remainingFrames <= Int64(UInt32.max) else { return }
+        let remaining = AVAudioFrameCount(remainingFrames)
         baseFrame = startFrame
         scheduleGeneration += 1
         let generation = scheduleGeneration

@@ -112,8 +112,8 @@ struct ModernSystemTranscriber {
 
 // MARK: - 旧系统回退：SFSpeechRecognizer（macOS 13+）
 
-/// 基于 SFSpeechRecognizer 的文件转写。
-/// 服务器识别有约 1 分钟限制，因此把音频切成 55 秒片段逐段识别再拼接时间轴。
+/// 基于 SFSpeechRecognizer 的本地文件转写。
+/// 长音频切成 55 秒片段逐段识别，再拼接时间轴。
 struct LegacySystemTranscriber {
     private static let chunkSeconds = 55.0
 
@@ -128,7 +128,7 @@ struct LegacySystemTranscriber {
         }
         // 隐私承诺：音频永不出本机，不支持本机识别就直接报不可用
         guard recognizer.supportsOnDeviceRecognition else {
-            throw TranscriptionError.recognizerUnavailable
+            throw TranscriptionError.onDeviceRecognitionUnavailable
         }
         let onDevice = true
 
