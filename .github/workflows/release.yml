@@ -57,11 +57,22 @@ jobs:
         run: |
           export GIT_LFS_SKIP_SMUDGE=1
           MODEL_DIR="$RUNNER_TEMP/whisperkit-coreml"
-          git clone --filter=blob:none --no-checkout \
-            https://huggingface.co/argmaxinc/whisperkit-coreml "$MODEL_DIR"
-          git -C "$MODEL_DIR" checkout --detach "$MODEL_REVISION"
-          git -C "$MODEL_DIR" lfs pull \
-            --include="openai_whisper-small/**" --exclude=""
+          git init "$MODEL_DIR"
+          git -C "$MODEL_DIR" remote add origin \
+            https://huggingface.co/argmaxinc/whisperkit-coreml
+          for attempt in 1 2 3; do
+            git -C "$MODEL_DIR" fetch --depth=1 origin "$MODEL_REVISION" && break
+            [ "$attempt" -lt 3 ] || exit 1
+            sleep $((attempt * 5))
+          done
+          git -C "$MODEL_DIR" checkout --detach FETCH_HEAD
+          git -C "$MODEL_DIR" lfs install --local
+          for attempt in 1 2 3; do
+            git -C "$MODEL_DIR" lfs pull \
+              --include="openai_whisper-small/**" --exclude="" && break
+            [ "$attempt" -lt 3 ] || exit 1
+            sleep $((attempt * 5))
+          done
           test -f "$MODEL_DIR/openai_whisper-small/config.json"
           test -f "$MODEL_DIR/openai_whisper-small/MelSpectrogram.mlmodelc/coremldata.bin"
           test -f "$MODEL_DIR/openai_whisper-small/AudioEncoder.mlmodelc/coremldata.bin"
@@ -154,16 +165,32 @@ jobs:
                 --notes-file "$RUNNER_TEMP/release-notes.md" \
                 --draft=false
             else
-              jq -e --arg zip "$ZIP_NAME" '
-                ((.body // "")
+              if ! jq -e --arg zip "$ZIP_NAME" --arg hash "$ACTUAL" '
+                ((.body // "" | gsub("\r\n"; "\n"))
                   | capture("(^|\\n)SHA256: (?<hash>[0-9a-fA-F]{64})(\\n|$)").hash
-                  | ascii_downcase) as $hash
-                | any((.assets // [])[];
-                    .name == $zip and
-                    .state == "uploaded" and
-                    .size > 0 and
-                    .digest == ("sha256:" + $hash))
-              ' "$RELEASE_STATE" >/dev/null
+                  | ascii_downcase) == $hash
+                and any((.assets // [])[];
+                  .name == $zip and
+                  .state == "uploaded" and
+                  .size > 0 and
+                  .digest == ("sha256:" + $hash))
+              ' "$RELEASE_STATE" >/dev/null; then
+                gh release upload "$RELEASE_TAG" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  "$RELEASE_DIR/$ZIP_NAME" \
+                  --clobber
+                jq -r --arg hash "$ACTUAL" '
+                  (.body // "" | gsub("\r\n"; "\n"))
+                  | if test("(^|\\n)SHA256: [0-9a-fA-F]{64}(\\n|$)") then
+                      sub("SHA256: [0-9a-fA-F]{64}"; "SHA256: " + $hash)
+                    else
+                      "SHA256: " + $hash + "\n\n" + .
+                    end
+                ' "$RELEASE_STATE" > "$RUNNER_TEMP/repaired-notes.md"
+                gh release edit "$RELEASE_TAG" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --notes-file "$RUNNER_TEMP/repaired-notes.md"
+              fi
             fi
           else
             gh release create "$RELEASE_TAG" \
@@ -172,6 +199,19 @@ jobs:
               --title "Echo Player $RELEASE_TAG" \
               --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json body,assets \
+            | jq -e --arg zip "$ZIP_NAME" --arg hash "$ACTUAL" '
+                ((.body // "" | gsub("\r\n"; "\n"))
+                  | capture("(^|\\n)SHA256: (?<hash>[0-9a-fA-F]{64})(\\n|$)").hash
+                  | ascii_downcase) == $hash
+                and any((.assets // [])[];
+                  .name == $zip and
+                  .state == "uploaded" and
+                  .size > 0 and
+                  .digest == ("sha256:" + $hash))
+              ' >/dev/null
           gh api --method POST \
             "repos/$GITHUB_REPOSITORY/dispatches" \
             -f event_type=release-site-refresh
