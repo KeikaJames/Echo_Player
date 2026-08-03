@@ -275,6 +275,36 @@
   @media (max-width: 720px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 36px 24px; } }
   @media (max-width: 440px) { .grid { grid-template-columns: 1fr; } }
 
+  .release .inner-narrow { max-width: 760px; }
+  .release h2, .release .h2-sub { text-align: left; }
+  .release-meta {
+    margin-bottom: 10px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .release-list {
+    margin-top: 40px;
+    list-style: none;
+    border-top: 1px solid var(--hairline);
+  }
+  .release-list li {
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    gap: 24px;
+    padding: 22px 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .release-list h3 { font-size: 17px; font-weight: 600; }
+  .release-list p { font-size: 15px; color: var(--muted); }
+  .release-note { margin-top: 20px; color: var(--muted); font-size: 13px; }
+  @media (max-width: 600px) {
+    .release { padding-block: 80px; }
+    .release-list { margin-top: 32px; }
+    .release-list li { grid-template-columns: 1fr; gap: 4px; padding: 18px 0; }
+  }
+
   .steps { max-width: 560px; margin: 52px auto 0; }
   .step { display: grid; grid-template-columns: 34px 1fr; gap: 16px; padding: 22px 0; border-bottom: 1px solid var(--hairline); align-items: baseline; }
   .step:last-of-type { border-bottom: none; }
@@ -305,8 +335,8 @@
     <a class="brand" href="#"><img src="icon.png" alt="Echo Player 图标">Echo Player</a>
     <div class="links">
       <a href="#features">功能</a>
+      <a href="#updates">更新</a>
       <a href="#install">安装</a>
-      <a href="#contact">反馈</a>
       <a href="https://github.com/KeikaJames/Echo_Player">GitHub</a>
     </div>
   </div>
@@ -359,6 +389,39 @@
       <p class="scene-cap" id="sceneCap">往下滚动</p>
     </div>
   </div>
+
+  <section class="release" id="updates" aria-labelledby="updates-title">
+    <div class="inner-narrow">
+      <header class="release-head reveal">
+        <p class="release-meta">版本 1.1 预览 · <time datetime="2026-08-03">2026 年 8 月 3 日</time></p>
+        <h2 id="updates-title">双语字幕与会议摘要。</h2>
+        <p class="h2-sub">下一版将加入系统翻译与本机会议整理，并修复播放、语音识别和应用内更新中的多项稳定性问题。</p>
+      </header>
+      <ul class="release-list" role="list">
+        <li class="reveal" style="--d:.05s">
+          <h3>双语字幕</h3>
+          <p>歌词、视频字幕和实时字幕可保留原文并显示系统翻译，目标语言统一管理。</p>
+        </li>
+        <li class="reveal" style="--d:.10s">
+          <h3>本机会议摘要</h3>
+          <p>使用 Apple Intelligence 将会议记录整理为概述、要点、决定、待办和章节，原始内容不离开设备。</p>
+        </li>
+        <li class="reveal" style="--d:.15s">
+          <h3>多格式播放</h3>
+          <p>完善多音轨、跳转、音频设备切换和异常回退；扩展格式的播放、歌词识别与拍点分析统一使用内置解码通路。</p>
+        </li>
+        <li class="reveal" style="--d:.20s">
+          <h3>语音识别</h3>
+          <p>长音频改为分段处理，并补充任务取消、识别进度、重复识别和缓存隔离。</p>
+        </li>
+        <li class="reveal" style="--d:.25s">
+          <h3>应用内更新</h3>
+          <p>新增下载来源、版本、架构、签名、SHA-256 与解压体积校验；新版启动异常时可恢复原版本。</p>
+        </li>
+      </ul>
+      <p class="release-note reveal" style="--d:.3s">系统翻译首次使用某种语言时，macOS 可能下载对应语言包；会议摘要需要开启 Apple Intelligence。</p>
+    </div>
+  </section>
 
   <section class="alt" id="features">
     <div class="inner-narrow">
