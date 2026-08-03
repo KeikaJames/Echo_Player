@@ -39,6 +39,8 @@ final class PlayerModel {
     var repeatMode: RepeatMode = .off
     var shuffleEnabled = false
     var showLyrics = true
+    private(set) var usesFFmpegPlayback = false
+    private(set) var availableAudioTracks: [PlaybackAudioTrack] = []
 
     /// 边缘光晕开关（窗内 + 窗外一起控制）。
     var glowEnabled: Bool = UserDefaults.standard.object(forKey: "glowEnabled") as? Bool ?? true {
@@ -69,20 +71,26 @@ final class PlayerModel {
     /// 当前曲目是「AVFoundation 原生视频」时，供画面渲染层使用的 AVPlayer。
     /// FFmpeg 后端的视频（mkv/webm/flv/avi/ts）不走这里，画面由 ffmpegPlayerView 提供。
     var videoPlayer: AVPlayer? {
-        guard let track = currentTrack, track.isVideo, !track.needsFFmpeg else { return nil }
+        guard let track = currentTrack, track.isVideo, !usesFFmpegPlayback else { return nil }
         return videoBackend.player
     }
 
     /// 当前曲目是「FFmpeg 视频」时，KSPlayer 自带的画面渲染 NSView。
     var ffmpegPlayerView: NSView? {
-        guard let track = currentTrack, track.isVideo, track.needsFFmpeg else { return nil }
+        guard let track = currentTrack, track.isVideo, usesFFmpegPlayback else { return nil }
         return ffmpegBackend.playerView
     }
 
     // MARK: - 歌词状态
-    var lyricLines: [LyricLine] = []
+    var lyricLines: [LyricLine] = [] {
+        didSet { lyricsRevision &+= 1 }
+    }
+    private(set) var lyricsRevision = 0
     var lyricsStatus: LyricsStatus = .idle
     var currentLineIndex: Int?
+    var translatedLyrics: [UUID: String] = [:]
+    var lyricsTranslationState: BilingualTranslationState = .idle
+    var lyricsTranslationTarget: String?
 
     var currentTrack: Track? {
         currentTrackID.flatMap { id in playlist.first { $0.id == id } }
@@ -94,9 +102,19 @@ final class PlayerModel {
     // FFmpeg（KSPlayer）后端：mkv/webm/ogg/opus/ape/wma/flv/avi/ts 等 AVFoundation 打不开的格式
     @ObservationIgnored private let ffmpegBackend = FFmpegBackend()
     @ObservationIgnored private var player: PlaybackBackend
-    @ObservationIgnored private var consecutiveLoadFailures = 0
+    @ObservationIgnored private var playbackSourceIdentity: MediaFileIdentity?
+    @ObservationIgnored private var playbackGeneration: UInt64 = 0
+    @ObservationIgnored private var didAttemptFFmpegFallback = false
+    @ObservationIgnored private var wantsPlayback = false
+    @ObservationIgnored private var playbackIntentGeneration: UInt64 = 0
+    @ObservationIgnored private var failedPlaybackTrackIDs: Set<Track.ID> = []
     @ObservationIgnored private var displayTimer: Timer?
     @ObservationIgnored private var transcriptionTask: Task<Void, Never>?
+    @ObservationIgnored private var lyricsUpgradeTask: Task<Void, Never>?
+    @ObservationIgnored private var lyricsPipelineGeneration: UInt64 = 0
+    @ObservationIgnored private var lyricsProgressGeneration: UInt64 = 0
+    @ObservationIgnored private var analysisAudioTask: Task<AnalysisAudioSource.Prepared, Error>?
+    @ObservationIgnored private var analysisAudioGeneration: UInt64 = 0
     // 离线拍点网格：就绪后光晕按网格零延迟触发；未就绪时用实时检测器过渡
     @ObservationIgnored private var beatGrid: [Double]?
     @ObservationIgnored private var beatGridTask: Task<Void, Never>?
@@ -117,6 +135,43 @@ final class PlayerModel {
         audioBackend.onTrackEnd = endHandler
         videoBackend.onTrackEnd = endHandler
         ffmpegBackend.onTrackEnd = endHandler
+        audioBackend.onPlaybackError = { [weak self] error in
+            guard let self else { return }
+            self.handlePlaybackError(error, from: self.audioBackend)
+        }
+        ffmpegBackend.onPlaybackError = { [weak self] error in
+            guard let self else { return }
+            self.handlePlaybackError(error, from: self.ffmpegBackend)
+        }
+        videoBackend.onPlaybackError = { [weak self] error in
+            guard let self else { return }
+            self.handlePlaybackError(error, from: self.videoBackend)
+        }
+        videoBackend.onPlaybackIntentChange = { [weak self] wantsPlayback in
+            guard let self, self.player === self.videoBackend,
+                  self.currentTrackID != nil,
+                  self.wantsPlayback != wantsPlayback else { return }
+            self.playbackIntentGeneration &+= 1
+            self.wantsPlayback = wantsPlayback
+        }
+        videoBackend.onRateChange = { [weak self] value in
+            guard let self, self.player === self.videoBackend,
+                  abs(self.playbackRate - value) > 0.001 else { return }
+            self.playbackRate = value
+        }
+        videoBackend.onAudioTrackChange = { [weak self] _ in
+            guard let self, let track = self.currentTrack,
+                  track.isVideo, self.player === self.videoBackend else { return }
+            self.handleAudioTrackChange(for: track)
+        }
+        ffmpegBackend.onAudioTracksChange = { [weak self] tracks in
+            self?.availableAudioTracks = tracks
+        }
+        ffmpegBackend.onAudioTrackChange = { [weak self] _ in
+            guard let self, let track = self.currentTrack,
+                  self.player === self.ffmpegBackend else { return }
+            self.handleAudioTrackChange(for: track)
+        }
         videoBackend.onVideoSize = { [weak self] size in
             self?.applyWindowAspect(size)
         }
@@ -128,6 +183,11 @@ final class PlayerModel {
             if abs(seconds - self.currentTime) > 0.02 {
                 self.currentTime = seconds
                 self.updateCurrentLine()
+            }
+            if seconds > 1, let trackID = self.currentTrackID,
+               !self.failedPlaybackTrackIDs.isEmpty,
+               !self.failedPlaybackTrackIDs.contains(trackID) {
+                self.failedPlaybackTrackIDs.removeAll()
             }
             // 兜底时长：FFmpeg 后端的 duration 在异步 readyToPlay 后才可用，
             // load 时读到的是 0——这里发现后端已给出有效时长时补上，进度条才有终点
@@ -145,12 +205,15 @@ final class PlayerModel {
                 self.isPlaying = self.player.isPlaying
                 self.updateNowPlayingInfo()
             }
-            // 视频氛围光：每 0.3 秒采样一次画面边缘色（仅 AVFoundation 原生视频有取样能力）
+            // 视频氛围光：每 0.3 秒采样一次画面边缘色
             if ticks % 3 == 0 {
-                let sampleable = self.currentTrack?.isVideo == true && self.currentTrack?.needsFFmpeg != true
-                if sampleable, let colors = self.videoBackend.sampleEdgeColors() {
+                let track = self.currentTrack
+                let colors = self.usesFFmpegPlayback
+                    ? self.ffmpegBackend.sampleEdgeColors()
+                    : self.videoBackend.sampleEdgeColors()
+                if track?.isVideo == true, let colors {
                     self.ambientEdgeColors = colors
-                } else if !sampleable {
+                } else if track?.isVideo != true {
                     self.ambientEdgeColors = nil
                 }
             }
@@ -275,6 +338,12 @@ final class PlayerModel {
     // MARK: - 播放控制
 
     func play(trackID: Track.ID) {
+        playbackIntentGeneration &+= 1
+        failedPlaybackTrackIDs.removeAll()
+        continuePlayback(trackID: trackID)
+    }
+
+    private func continuePlayback(trackID: Track.ID) {
         guard playlist.contains(where: { $0.id == trackID }) else { return }
         currentTrackID = trackID
         sidebarSelection = trackID
@@ -286,6 +355,16 @@ final class PlayerModel {
             stop()
             return
         }
+        playbackGeneration &+= 1
+        let loadGeneration = playbackGeneration
+        didAttemptFFmpegFallback = false
+        wantsPlayback = playWhenReady
+        playbackSourceIdentity = nil
+        cancelTranscription()
+        cancelAnalysisAudioPreparation()
+        beatGridTask?.cancel()
+        beatGridTask = nil
+        beatGrid = nil
         // 三分支：AVFoundation 打不开的格式走 FFmpeg，原生视频走 AVPlayer，其余音频走 AVAudioEngine
         let wanted: PlaybackBackend
         if track.needsFFmpeg {
@@ -300,26 +379,48 @@ final class PlayerModel {
             player = wanted
             player.rate = playbackRate
         }
+        usesFFmpegPlayback = player === ffmpegBackend
+        if !usesFFmpegPlayback { availableAudioTracks = [] }
         ambientEdgeColors = nil
-        // FFmpeg 视频不上报自然尺寸，也没有氛围光采样，沿用纯黑底，不做窗口比例绑定
-        if !track.isVideo || track.needsFFmpeg { clearWindowAspect() }
+        // FFmpeg 视频不上报自然尺寸，不做窗口比例绑定
+        if !track.isVideo || usesFFmpegPlayback { clearWindowAspect() }
         do {
-            try player.load(url: track.url)
-            consecutiveLoadFailures = 0
+            guard let sourceIdentity = MediaFileIdentity(url: track.url) else {
+                throw AnalysisAudioSource.PreparationError.cannotDecode
+            }
+            do {
+                try player.load(url: track.url)
+            } catch {
+                // 部分裸流（典型是 ADTS .aac）扩展名虽常见，AVAudioFile 仍可能拒绝；
+                // 保留原生优先策略，真正打不开时再交给内置 FFmpeg。
+                guard player === audioBackend else { throw error }
+                player.unload()
+                player = ffmpegBackend
+                usesFFmpegPlayback = true
+                player.rate = playbackRate
+                try player.load(url: track.url)
+            }
+            guard playbackGeneration == loadGeneration else { return }
+            guard sourceIdentity.isCurrentContent(url: track.url) else {
+                player.unload()
+                throw AnalysisAudioSource.PreparationError.sourceChanged
+            }
+            playbackSourceIdentity = sourceIdentity
         } catch {
             // 保留曲目上下文并明确报错，然后自动跳下一首（整列表都坏时停下防死循环）
+            player.unload()
+            playbackSourceIdentity = nil
+            wantsPlayback = false
             isPlaying = false
             cancelTranscription()
             lyricLines = []
+            clearLyricsTranslation()
             currentLineIndex = nil
             lyricsStatus = .failed("无法播放「\(track.title)」：文件已损坏或格式不受支持")
-            consecutiveLoadFailures += 1
-            if playWhenReady, consecutiveLoadFailures < playlist.count {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                    guard let self, self.currentTrackID == track.id else { return }
-                    self.next()
-                }
-            }
+            failedPlaybackTrackIDs.insert(track.id)
+            schedulePlaybackAfterFailure(of: track,
+                                         generation: loadGeneration,
+                                         shouldContinue: playWhenReady)
             return
         }
 
@@ -333,8 +434,83 @@ final class PlayerModel {
             isPlaying = false
         }
         updateNowPlayingInfo()
-        startLyricsPipeline(forceRecognize: false)
+        startAnalysisAudioPreparation(for: track)
+        startLyricsWhenAudioSelectionIsReady(for: track, generation: loadGeneration)
         startBeatGridAnalysis(for: track)
+    }
+
+    private func startLyricsWhenAudioSelectionIsReady(for track: Track, generation: UInt64) {
+        let backend = player
+        guard backend === videoBackend || backend === ffmpegBackend else {
+            startLyricsPipeline(forceRecognize: false)
+            return
+        }
+        let trackID = track.id
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if backend === self.videoBackend {
+                _ = await self.videoBackend.analysisAudioTrackID()
+            } else {
+                _ = await self.ffmpegBackend.analysisAudioStreamIndex()
+            }
+            guard self.player === backend,
+                  self.currentTrackID == trackID,
+                  self.playbackGeneration == generation else { return }
+            self.startLyricsPipeline(forceRecognize: false)
+        }
+    }
+
+    private func handleAudioTrackChange(for track: Track) {
+        cancelAnalysisAudioPreparation()
+        startAnalysisAudioPreparation(for: track)
+        startBeatGridAnalysis(for: track)
+        // 侧车 LRC 始终高于自动识别；切音轨不应把用户歌词当成过期结果删掉。
+        startLyricsPipeline(forceRecognize: false)
+    }
+
+    private func startAnalysisAudioPreparation(for track: Track) {
+        let url = track.url
+        let backend = player
+        analysisAudioGeneration &+= 1
+        guard let sourceIdentity = playbackSourceIdentity,
+              sourceIdentity.isCurrentContent(url: url) else {
+            analysisAudioTask = nil
+            return
+        }
+        let task = Task(priority: .utility) {
+            let audioTrackID: CMPersistentTrackID?
+            let audioStreamIndex: Int32?
+            if backend === self.videoBackend {
+                guard let selected = await self.videoBackend.analysisAudioTrackID() else {
+                    throw AnalysisAudioSource.PreparationError.noAudioTrack
+                }
+                audioTrackID = selected
+                audioStreamIndex = nil
+            } else if backend === self.ffmpegBackend {
+                guard let selected = await self.ffmpegBackend.analysisAudioStreamIndex() else {
+                    throw AnalysisAudioSource.PreparationError.noAudioTrack
+                }
+                audioTrackID = nil
+                audioStreamIndex = selected
+            } else {
+                audioTrackID = nil
+                audioStreamIndex = nil
+            }
+            try Task.checkCancellation()
+            return try await AnalysisAudioSource.prepare(url: url,
+                                                         expectedSourceIdentity: sourceIdentity,
+                                                         preferredAudioTrackID: audioTrackID,
+                                                         preferredAudioStreamIndex: audioStreamIndex)
+        }
+        // completed Task 持有 Prepared，作为当前曲目的 single-flight/result owner；
+        // 换曲或强制重试时由 cancelAnalysisAudioPreparation 统一释放临时 WAV。
+        analysisAudioTask = task
+    }
+
+    private func cancelAnalysisAudioPreparation() {
+        analysisAudioGeneration &+= 1
+        analysisAudioTask?.cancel()
+        analysisAudioTask = nil
     }
 
     /// 后台预分析整首歌的拍点网格。
@@ -343,12 +519,22 @@ final class PlayerModel {
         beatGrid = nil
         let trackID = track.id
         let url = track.url
+        guard let analysisAudioTask else { return }
         beatGridTask = Task {
-            let grid = await BeatGrid.analyze(url: url)
-            guard !Task.isCancelled, !grid.isEmpty else { return }
-            await MainActor.run {
-                guard self.currentTrackID == trackID else { return }
-                self.beatGrid = grid
+            do {
+                let prepared = try await analysisAudioTask.value
+                try Task.checkCancellation()
+                guard prepared.sourceIdentity.isCurrentContent(url: url) else { return }
+                let grid = await BeatGrid.analyze(url: prepared.url)
+                guard !Task.isCancelled, !grid.isEmpty,
+                      prepared.sourceIdentity.isCurrentContent(url: url) else { return }
+                await MainActor.run {
+                    guard self.currentTrackID == trackID,
+                          prepared.sourceIdentity.isCurrentContent(url: url) else { return }
+                    self.beatGrid = grid
+                }
+            } catch {
+                // 无音轨或切歌取消时保持无拍点状态
             }
         }
     }
@@ -362,7 +548,14 @@ final class PlayerModel {
     }
 
     func resume() {
-        guard currentTrack != nil else { return }
+        guard let track = currentTrack else { return }
+        playbackIntentGeneration &+= 1
+        wantsPlayback = true
+        if playbackSourceIdentity == nil {
+            failedPlaybackTrackIDs.remove(track.id)
+            loadCurrentTrack(playWhenReady: true)
+            return
+        }
         // 已经播到结尾：从头重播（seek 携带播放态，画面必定刷新）
         if duration > 0, currentTime >= duration - 0.05 {
             seek(to: 0)
@@ -373,6 +566,8 @@ final class PlayerModel {
     }
 
     func pause() {
+        playbackIntentGeneration &+= 1
+        wantsPlayback = false
         player.pause()
         isPlaying = false
         updateNowPlayingInfo()
@@ -381,13 +576,25 @@ final class PlayerModel {
     }
 
     func stop() {
+        playbackGeneration &+= 1
+        playbackIntentGeneration &+= 1
+        failedPlaybackTrackIDs.removeAll()
+        wantsPlayback = false
         player.unload()
+        usesFFmpegPlayback = false
+        availableAudioTracks = []
+        playbackSourceIdentity = nil
         isPlaying = false
         currentTime = 0
         duration = 0
         currentTrackID = nil
         cancelTranscription()
+        cancelAnalysisAudioPreparation()
+        beatGridTask?.cancel()
+        beatGridTask = nil
+        beatGrid = nil
         lyricLines = []
+        clearLyricsTranslation()
         lyricsStatus = .idle
         currentLineIndex = nil
         updateNowPlayingInfo()
@@ -450,9 +657,125 @@ final class PlayerModel {
         }
     }
 
+    private func handlePlaybackError(_ error: Error, from backend: PlaybackBackend) {
+        guard player === backend, let track = currentTrack else { return }
+        if backend !== ffmpegBackend,
+           fallBackToFFmpeg(for: track, from: backend, after: error) { return }
+        let shouldContinue = wantsPlayback
+        playbackGeneration &+= 1
+        let failureGeneration = playbackGeneration
+        NSLog("播放失败：\(error.localizedDescription)")
+        player.unload()
+        availableAudioTracks = []
+        playbackSourceIdentity = nil
+        wantsPlayback = false
+        isPlaying = false
+        currentTime = 0
+        duration = 0
+        cancelTranscription()
+        cancelAnalysisAudioPreparation()
+        beatGridTask?.cancel()
+        beatGridTask = nil
+        beatGrid = nil
+        ambientEdgeColors = nil
+        lyricLines = []
+        clearLyricsTranslation()
+        currentLineIndex = nil
+        lyricsStatus = .failed("无法播放「\(track.title)」：文件已损坏或格式不受支持")
+        updateNowPlayingInfo()
+        failedPlaybackTrackIDs.insert(track.id)
+        schedulePlaybackAfterFailure(of: track,
+                                     generation: failureGeneration,
+                                     shouldContinue: shouldContinue)
+    }
+
+    private func schedulePlaybackAfterFailure(of track: Track, generation: UInt64,
+                                              shouldContinue: Bool) {
+        guard shouldContinue,
+              let nextID = nextTrackIDAfterFailure(of: track.id) else { return }
+        let intentGeneration = playbackIntentGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self, self.currentTrackID == track.id,
+                  self.playbackGeneration == generation,
+                  self.playbackIntentGeneration == intentGeneration else { return }
+            self.continuePlayback(trackID: nextID)
+        }
+    }
+
+    private func nextTrackIDAfterFailure(of trackID: Track.ID) -> Track.ID? {
+        let candidates = playlist.filter { !failedPlaybackTrackIDs.contains($0.id) }
+        guard !candidates.isEmpty else { return nil }
+        if shuffleEnabled { return candidates.randomElement()?.id }
+        guard let index = playlist.firstIndex(where: { $0.id == trackID }) else { return nil }
+        if let next = playlist[(index + 1)...].first(where: {
+            !failedPlaybackTrackIDs.contains($0.id)
+        }) {
+            return next.id
+        }
+        guard repeatMode == .all, index > 0 else { return nil }
+        return playlist[..<index].first(where: {
+            !failedPlaybackTrackIDs.contains($0.id)
+        })?.id
+    }
+
+    private func fallBackToFFmpeg(for track: Track, from backend: PlaybackBackend,
+                                  after error: Error) -> Bool {
+        guard !didAttemptFFmpegFallback,
+              let sourceIdentity = playbackSourceIdentity,
+              sourceIdentity.isCurrentContent(url: track.url) else { return false }
+
+        didAttemptFFmpegFallback = true
+        playbackGeneration &+= 1
+        let fallbackGeneration = playbackGeneration
+        let target = backend.currentTime
+        let shouldResume = wantsPlayback
+        let preferredAudioTrackOrdinal = backend === videoBackend
+            ? videoBackend.selectedAudioTrackOrdinal
+            : nil
+        cancelTranscription()
+        cancelAnalysisAudioPreparation()
+        beatGridTask?.cancel()
+        beatGridTask = nil
+        beatGrid = nil
+        backend.unload()
+        player = ffmpegBackend
+        usesFFmpegPlayback = true
+        if track.isVideo { clearWindowAspect() }
+
+        do {
+            player.rate = playbackRate
+            try player.load(url: track.url)
+            ffmpegBackend.preferAudioTrack(at: preferredAudioTrackOrdinal)
+            guard sourceIdentity.isCurrentContent(url: track.url) else {
+                throw AnalysisAudioSource.PreparationError.sourceChanged
+            }
+        } catch {
+            NSLog("原生播放降级 FFmpeg 失败：\(error.localizedDescription)")
+            player.unload()
+            return false
+        }
+
+        playbackSourceIdentity = sourceIdentity
+        currentTime = target
+        duration = player.duration > 0 ? player.duration : track.duration
+        ambientEdgeColors = nil
+        if target > 0 {
+            player.seek(to: target, resume: shouldResume)
+        } else if shouldResume {
+            player.play()
+        }
+        isPlaying = shouldResume
+        updateNowPlayingInfo()
+        startAnalysisAudioPreparation(for: track)
+        startLyricsWhenAudioSelectionIsReady(for: track, generation: fallbackGeneration)
+        startBeatGridAnalysis(for: track)
+        NSLog("原生播放失败，已切换 FFmpeg：\(error.localizedDescription)")
+        return true
+    }
+
     func seek(to seconds: Double) {
         let clamped = max(0, min(seconds, duration > 0 ? duration : seconds))
-        player.seek(to: clamped, resume: isPlaying)
+        player.seek(to: clamped, resume: wantsPlayback)
         currentTime = clamped
         updateCurrentLine()
         updateNowPlayingInfo()
@@ -464,6 +787,11 @@ final class PlayerModel {
 
     func adjustVolume(by delta: Float) {
         volume = max(0, min(1, volume + delta))
+    }
+
+    func selectAudioTrack(id: Int32) {
+        guard player === ffmpegBackend else { return }
+        ffmpegBackend.selectAudioTrack(id: id)
     }
 
     func cycleRepeatMode() {
@@ -508,17 +836,51 @@ final class PlayerModel {
     private func cancelTranscription() {
         transcriptionTask?.cancel()
         transcriptionTask = nil
+        lyricsUpgradeTask?.cancel()
+        lyricsUpgradeTask = nil
+        lyricsPipelineGeneration &+= 1
+        lyricsProgressGeneration &+= 1
+    }
+
+    func clearLyricsTranslation() {
+        translatedLyrics.removeAll()
+        lyricsTranslationState = .idle
+        lyricsTranslationTarget = nil
     }
 
     /// 打开曲目后自动执行：LRC 文件 → 缓存 → 自动识别。
     func startLyricsPipeline(forceRecognize: Bool) {
         cancelTranscription()
+        let pipelineGeneration = lyricsPipelineGeneration
         lyricLines = []
+        clearLyricsTranslation()
         currentLineIndex = nil
         lyricsStatus = .idle
 
         guard let track = currentTrack else { return }
-        let variantID = "auto|\(AutoTranscriber.systemLocale().identifier)"
+        guard let sourceIdentity = playbackSourceIdentity,
+              sourceIdentity.isCurrentContent(url: track.url) else {
+            lyricsStatus = .failed(AnalysisAudioSource.PreparationError.sourceChanged.localizedDescription)
+            return
+        }
+        if forceRecognize {
+            cancelAnalysisAudioPreparation()
+            startAnalysisAudioPreparation(for: track)
+            startBeatGridAnalysis(for: track)
+        }
+        let requiresAnalysisFallback = player !== audioBackend
+            || (try? AVAudioFile(forReading: track.url)) == nil
+        let pipelineID = requiresAnalysisFallback ? "auto-ffmpeg-v1" : "auto"
+        let audioTrackVariant: String
+        if player === videoBackend {
+            audioTrackVariant = "|track-\(videoBackend.selectedAudioTrackID.map(String.init) ?? "none")"
+        } else if player === ffmpegBackend {
+            audioTrackVariant = "|stream-\(ffmpegBackend.selectedAudioStreamIndex.map(String.init) ?? "none")"
+        } else {
+            audioTrackVariant = ""
+        }
+        let variantID = "\(pipelineID)|\(AutoTranscriber.systemLocale().identifier)\(audioTrackVariant)"
+        let preparedAudioTask = analysisAudioTask
 
         if !forceRecognize {
             if let lrcLines = LRCFile.sidecarLines(for: track.url) {
@@ -527,45 +889,91 @@ final class PlayerModel {
                 updateCurrentLine()
                 return
             }
-            if let cached = TranscriptCache.load(for: track.url, localeID: variantID) {
-                lyricLines = cached.lines
-                lyricsStatus = .done(cached.source)
-                updateCurrentLine()
-                // 识别出的结果视为草稿：后台查在线歌词，命中则静默升级
-                if cached.source == .recognized {
-                    upgradeFromOnlineIfPossible(track: track, variantID: variantID)
+            let trackID = track.id
+            lyricsStatus = .recognizing(fraction: nil, message: nil)
+            transcriptionTask = Task {
+                let cached = await TranscriptCache.load(for: track.url,
+                                                        localeID: variantID,
+                                                        sourceIdentity: sourceIdentity)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.currentTrackID == trackID,
+                          self.lyricsPipelineGeneration == pipelineGeneration else { return }
+                    guard sourceIdentity.isCurrentContent(url: track.url) else {
+                        self.lyricsStatus = .failed(AnalysisAudioSource.PreparationError.sourceChanged.localizedDescription)
+                        return
+                    }
+                    if let cached {
+                        self.lyricLines = cached.lines
+                        self.lyricsStatus = .done(cached.source)
+                        self.updateCurrentLine()
+                        // 识别出的结果视为草稿：后台查在线歌词，命中则静默升级
+                        if cached.source == .recognized {
+                            self.upgradeFromOnlineIfPossible(track: track,
+                                                             variantID: variantID,
+                                                             pipelineGeneration: pipelineGeneration,
+                                                             sourceIdentity: sourceIdentity)
+                        }
+                    } else {
+                        self.recognize(track: track,
+                                       variantID: variantID,
+                                       pipelineGeneration: pipelineGeneration,
+                                       sourceIdentity: sourceIdentity,
+                                       analysisAudioTask: preparedAudioTask)
+                    }
                 }
-                return
             }
-        } else {
-            TranscriptCache.remove(for: track.url, localeID: variantID)
+            return
         }
 
-        recognize(track: track, variantID: variantID)
+        TranscriptCache.remove(for: track.url, localeID: variantID)
+        recognize(track: track,
+                  variantID: variantID,
+                  pipelineGeneration: pipelineGeneration,
+                  sourceIdentity: sourceIdentity,
+                  analysisAudioTask: preparedAudioTask)
     }
 
     /// 缓存里是识别结果时，静默尝试用在线歌词升级替换。
-    private func upgradeFromOnlineIfPossible(track: Track, variantID: String) {
+    private func upgradeFromOnlineIfPossible(track: Track,
+                                             variantID: String,
+                                             pipelineGeneration: UInt64,
+                                             sourceIdentity: MediaFileIdentity) {
         let trackID = track.id
         let url = track.url
-        Task {
+        lyricsUpgradeTask?.cancel()
+        lyricsUpgradeTask = Task {
             let meta = await Track.loadMetadata(from: url)
+            guard !Task.isCancelled else { return }
             let title = meta.title ?? url.deletingPathExtension().lastPathComponent
             guard case .synced(let online)? = await OnlineLyrics.fetch(title: title,
                                                                        artist: meta.artist ?? "",
                                                                        duration: meta.duration) else { return }
-            await MainActor.run {
-                guard self.currentTrackID == trackID else { return }
+            let shouldSave = await MainActor.run {
+                guard self.currentTrackID == trackID,
+                      self.lyricsPipelineGeneration == pipelineGeneration,
+                      sourceIdentity.isCurrentContent(url: url) else { return false }
                 self.lyricLines = online
                 self.lyricsStatus = .done(.online)
-                TranscriptCache.save(lines: online, source: .online, for: url, localeID: variantID)
                 self.updateCurrentLine()
+                return true
+            }
+            if shouldSave, !Task.isCancelled {
+                await TranscriptCache.save(lines: online, source: .online,
+                                           for: url, localeID: variantID,
+                                           sourceIdentity: sourceIdentity)
             }
         }
     }
 
-    private func recognize(track: Track, variantID: String) {
+    private func recognize(track: Track,
+                           variantID: String,
+                           pipelineGeneration: UInt64,
+                           sourceIdentity: MediaFileIdentity,
+                           analysisAudioTask: Task<AnalysisAudioSource.Prepared, Error>?) {
         lyricsStatus = .recognizing(fraction: nil, message: nil)
+        lyricsProgressGeneration &+= 1
+        let progressGeneration = lyricsProgressGeneration
         let trackID = track.id
         let url = track.url
 
@@ -577,29 +985,58 @@ final class PlayerModel {
             if let result = await OnlineLyrics.fetch(title: title,
                                                      artist: meta.artist ?? "",
                                                      duration: meta.duration) {
-                await MainActor.run {
-                    guard self.currentTrackID == trackID else { return }
+                let cache = await MainActor.run { () -> (lines: [LyricLine], source: LyricsSource)? in
+                    guard self.currentTrackID == trackID,
+                          self.lyricsPipelineGeneration == pipelineGeneration,
+                          self.lyricsProgressGeneration == progressGeneration else { return nil }
+                    guard sourceIdentity.isCurrentContent(url: url) else {
+                        self.lyricsProgressGeneration &+= 1
+                        self.lyricsStatus = .failed(AnalysisAudioSource.PreparationError.sourceChanged.localizedDescription)
+                        return nil
+                    }
+                    self.lyricsProgressGeneration &+= 1
                     switch result {
                     case .synced(let online):
                         self.lyricLines = online
                         self.lyricsStatus = .done(.online)
-                        TranscriptCache.save(lines: online, source: .online, for: url, localeID: variantID)
+                        self.updateCurrentLine()
+                        return (online, .online)
                     case .instrumental:
                         // 曲库确认是纯音乐：不再浪费算力识别，写入否定缓存
                         self.lyricLines = []
                         self.lyricsStatus = .done(.online)
-                        TranscriptCache.save(lines: [], source: .online, for: url, localeID: variantID)
+                        self.updateCurrentLine()
+                        return ([], .online)
                     }
-                    self.updateCurrentLine()
+                }
+                if let cache, !Task.isCancelled {
+                    await TranscriptCache.save(lines: cache.lines, source: cache.source,
+                                               for: url, localeID: variantID,
+                                               sourceIdentity: sourceIdentity)
                 }
                 return
             }
             if Task.isCancelled { return }
 
             do {
-                let lines = try await AutoTranscriber.transcribe(url: url) { snapshot in
+                guard let analysisAudioTask else { throw TranscriptionError.cannotReadAudio }
+                let prepared = try await analysisAudioTask.value
+                try Task.checkCancellation()
+                guard prepared.sourceIdentity.hasSameContent(as: sourceIdentity),
+                      sourceIdentity.isCurrentContent(url: url) else {
+                    throw AnalysisAudioSource.PreparationError.sourceChanged
+                }
+                let lines = try await AutoTranscriber.transcribe(url: prepared.url) { snapshot in
                     Task { @MainActor in
-                        guard self.currentTrackID == trackID else { return }
+                        guard self.currentTrackID == trackID,
+                              self.lyricsPipelineGeneration == pipelineGeneration,
+                              self.lyricsProgressGeneration == progressGeneration else { return }
+                        guard sourceIdentity.isCurrentContent(url: url) else {
+                            self.lyricsProgressGeneration &+= 1
+                            self.lyricsStatus = .failed(AnalysisAudioSource.PreparationError.sourceChanged.localizedDescription)
+                            self.transcriptionTask?.cancel()
+                            return
+                        }
                         // 限频：行数和文案都没变化时，至多每 0.25 秒应用一次
                         let now = Date()
                         let significant = snapshot.lines.count != self.lyricLines.count
@@ -614,30 +1051,50 @@ final class PlayerModel {
                     }
                 }
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard self.currentTrackID == trackID else { return }
+                let shouldSave = await MainActor.run {
+                    guard self.currentTrackID == trackID,
+                          self.lyricsPipelineGeneration == pipelineGeneration,
+                          self.lyricsProgressGeneration == progressGeneration else { return false }
+                    guard sourceIdentity.isCurrentContent(url: url) else {
+                        self.lyricsProgressGeneration &+= 1
+                        self.lyricsStatus = .failed(AnalysisAudioSource.PreparationError.sourceChanged.localizedDescription)
+                        return false
+                    }
+                    self.lyricsProgressGeneration &+= 1
                     self.lyricLines = lines
                     if lines.isEmpty {
                         self.lyricsStatus = .failed("未在音频中识别到语音内容")
-                        // 否定缓存：纯音乐/无人声文件不再每次重跑识别
-                        TranscriptCache.save(lines: [], source: .recognized, for: url, localeID: variantID)
                     } else {
                         self.lyricsStatus = .done(.recognized)
-                        TranscriptCache.save(lines: lines, source: .recognized, for: url, localeID: variantID)
                         // 在线歌词库时通时不通：稍后在本次会话内自动重试升级
                         Task {
                             try? await Task.sleep(for: .seconds(90))
-                            guard self.currentTrackID == trackID else { return }
-                            self.upgradeFromOnlineIfPossible(track: track, variantID: variantID)
+                            guard self.currentTrackID == trackID,
+                                  self.lyricsPipelineGeneration == pipelineGeneration,
+                                  sourceIdentity.isCurrentContent(url: url) else { return }
+                            self.upgradeFromOnlineIfPossible(track: track,
+                                                             variantID: variantID,
+                                                             pipelineGeneration: pipelineGeneration,
+                                                             sourceIdentity: sourceIdentity)
                         }
                     }
                     self.updateCurrentLine()
+                    return true
+                }
+                if shouldSave {
+                    // 否定缓存：纯音乐/无人声文件不再每次重跑识别
+                    await TranscriptCache.save(lines: lines, source: .recognized,
+                                               for: url, localeID: variantID,
+                                               sourceIdentity: sourceIdentity)
                 }
             } catch is CancellationError {
                 // 切歌导致的取消，忽略
             } catch {
                 await MainActor.run {
-                    guard self.currentTrackID == trackID else { return }
+                    guard self.currentTrackID == trackID,
+                          self.lyricsPipelineGeneration == pipelineGeneration,
+                          self.lyricsProgressGeneration == progressGeneration else { return }
+                    self.lyricsProgressGeneration &+= 1
                     self.lyricsStatus = .failed(error.localizedDescription)
                 }
             }

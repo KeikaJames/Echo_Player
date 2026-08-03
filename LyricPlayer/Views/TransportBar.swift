@@ -153,6 +153,28 @@ struct TransportBar: View {
             .fixedSize()
             .help("播放速度")
 
+            if model.availableAudioTracks.count > 1 {
+                Menu {
+                    ForEach(model.availableAudioTracks) { track in
+                        Button {
+                            model.selectAudioTrack(id: track.id)
+                        } label: {
+                            if track.isSelected {
+                                Label(track.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(track.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 14))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("选择音轨")
+            }
+
             Button {
                 model.showLyrics.toggle()
             } label: {

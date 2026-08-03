@@ -5,11 +5,13 @@ import AppKit
 struct LyricPlayerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = PlayerModel.shared
+    @State private var translationSettings = TranslationSettings.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(model)
+                .environment(translationSettings)
                 .frame(minWidth: 980, minHeight: 620)
         }
         .defaultSize(width: 1240, height: 780)
@@ -22,6 +24,7 @@ struct LyricPlayerApp: App {
         Window("实时字幕", id: "live-captions") {
             LiveCaptionsView()
                 .environment(model)
+                .environment(translationSettings)
         }
         .defaultSize(width: 760, height: 380)
         .windowStyle(.hiddenTitleBar)   // 玻璃直通到顶（比手动改 styleMask 可靠，SwiftUI 不会回改）
@@ -32,6 +35,7 @@ struct LyricPlayerApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var isRestoringPreviousVersion = false
 
     // MARK: - 启动
 
@@ -42,12 +46,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .aqua)
         // 窗口恢复的最后一道保险：本应用永不保存/恢复窗口状态（杜绝多窗口堆叠）
         UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+        isRestoringPreviousVersion = UpdateInstaller.shared.beginPendingUpdateLaunch()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !isRestoringPreviousVersion else { return }
         PlayerModel.shared.restoreState()
         UpdateChecker.autoCheck()
         GlowHaloController.shared.enabled = PlayerModel.shared.glowEnabled
+        UpdateInstaller.shared.confirmPendingUpdateLaunchAfterHealthCheck()
 
         // 主窗口就绪后：挂接窗外光晕、chrome 自动隐藏，并补挂待处理的视频宽高比
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,

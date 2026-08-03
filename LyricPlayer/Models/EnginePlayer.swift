@@ -11,6 +11,8 @@ final class EnginePlayer {
 
     private var file: AVAudioFile?
     private var scheduleGeneration = 0
+    private var loadGeneration: UInt64 = 0
+    private var didReportPlaybackError = false
     private var baseFrame: AVAudioFramePosition = 0   // 本次调度的起始帧
     private var pausedAtSeconds: Double = 0           // 未播放时的当前位置
 
@@ -19,6 +21,7 @@ final class EnginePlayer {
 
     /// 曲目自然播完时回调（主线程）。
     var onTrackEnd: (() -> Void)?
+    var onPlaybackError: ((Error) -> Void)?
 
     var rate: Float = 1.0 {
         didSet { timePitch.rate = max(0.25, min(4, rate)) }
@@ -62,6 +65,11 @@ final class EnginePlayer {
 
     func load(url: URL) throws {
         let audioFile = try AVAudioFile(forReading: url)
+        guard Self.canSchedule(fileLength: audioFile.length, startFrame: 0) else {
+            throw EnginePlayerError.sourceTooLong
+        }
+        loadGeneration &+= 1
+        didReportPlaybackError = false
         stopNodeQuietly()
         engine.stop()
 
@@ -88,6 +96,8 @@ final class EnginePlayer {
     }
 
     func unload() {
+        loadGeneration &+= 1
+        didReportPlaybackError = false
         stopNodeQuietly()
         engine.stop()
         file = nil
@@ -98,7 +108,10 @@ final class EnginePlayer {
 
     func play() {
         guard file != nil else { return }
-        guard ensureEngineRunning() else { return }
+        guard ensureEngineRunning() else {
+            reportPlaybackError(EnginePlayerError.cannotStart)
+            return
+        }
         node.play()
         isPlaying = true
     }
@@ -119,7 +132,10 @@ final class EnginePlayer {
         scheduleSegment(fromSeconds: target)
         pausedAtSeconds = target
         if resume {
-            guard ensureEngineRunning() else { return }
+            guard ensureEngineRunning() else {
+                reportPlaybackError(EnginePlayerError.cannotStart)
+                return
+            }
             node.play()
             isPlaying = true
         } else {
@@ -171,6 +187,17 @@ final class EnginePlayer {
         }
     }
 
+    private func reportPlaybackError(_ error: Error) {
+        guard !didReportPlaybackError else { return }
+        didReportPlaybackError = true
+        let generation = loadGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.loadGeneration == generation,
+                  self.didReportPlaybackError else { return }
+            self.onPlaybackError?(error)
+        }
+    }
+
     private func stopNodeQuietly() {
         scheduleGeneration += 1
         node.stop()
@@ -180,25 +207,61 @@ final class EnginePlayer {
         guard let file else { return }
         let sampleRate = file.processingFormat.sampleRate
         let startFrame = AVAudioFramePosition(max(0, min(seconds, duration)) * sampleRate)
-        let remaining = AVAudioFrameCount(max(0, file.length - startFrame))
+        let segments = Self.frameSegments(fileLength: file.length, startFrame: startFrame)
         baseFrame = startFrame
         scheduleGeneration += 1
         let generation = scheduleGeneration
 
-        guard remaining > 0 else {
+        guard !segments.isEmpty else {
             DispatchQueue.main.async { [weak self] in self?.onTrackEnd?() }
             return
         }
-        node.scheduleSegment(file, startingFrame: startFrame, frameCount: remaining,
-                             at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self, self.scheduleGeneration == generation else { return }
-                self.isPlaying = false
-                self.pausedAtSeconds = self.duration
-                self.engine.pause()   // 播完不续曲时（单曲末尾/列表尽头）别让引擎空转
-                self.onTrackEnd?()
+
+        for (index, segment) in segments.enumerated() {
+            let isLast = index == segments.count - 1
+            node.scheduleSegment(file, startingFrame: segment.startFrame, frameCount: segment.frameCount,
+                                 at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                guard isLast else { return }
+                DispatchQueue.main.async {
+                    guard let self, self.scheduleGeneration == generation else { return }
+                    self.isPlaying = false
+                    self.pausedAtSeconds = self.duration
+                    self.engine.pause()   // 播完不续曲时（单曲末尾/列表尽头）别让引擎空转
+                    self.onTrackEnd?()
+                }
             }
         }
+    }
+
+    struct FrameSegment {
+        let startFrame: AVAudioFramePosition
+        let frameCount: AVAudioFrameCount
+    }
+
+    /// AVAudioPlayerNode 的单段帧数只有 UInt32；队列也必须有硬上限。
+    /// 超过这个范围时交给 FFmpeg 回退，不在内存里物化海量调度项。
+    static let maximumFrameSegments = 128
+
+    static func canSchedule(fileLength: AVAudioFramePosition,
+                            startFrame: AVAudioFramePosition) -> Bool {
+        let remaining = max(0, fileLength - max(0, min(startFrame, fileLength)))
+        let maximum = AVAudioFramePosition(AVAudioFrameCount.max)
+        let count = remaining / maximum + (remaining % maximum == 0 ? 0 : 1)
+        return count <= AVAudioFramePosition(maximumFrameSegments)
+    }
+
+    static func frameSegments(fileLength: AVAudioFramePosition,
+                              startFrame: AVAudioFramePosition) -> [FrameSegment] {
+        guard canSchedule(fileLength: fileLength, startFrame: startFrame) else { return [] }
+        var position = max(0, min(startFrame, fileLength))
+        var result: [FrameSegment] = []
+        let maximum = AVAudioFramePosition(AVAudioFrameCount.max)
+        while position < fileLength {
+            let count = AVAudioFrameCount(min(fileLength - position, maximum))
+            result.append(FrameSegment(startFrame: position, frameCount: count))
+            position += AVAudioFramePosition(count)
+        }
+        return result
     }
 
     /// 输出设备/采样率变化后的自愈：按新 mixer 格式重装 tap、重建检测器，
@@ -231,6 +294,20 @@ final class EnginePlayer {
             // 单声道分析（取左声道；节拍/响度对声道不敏感）
             self.detector?.process(channelData[0], count: frames)
             self.levelLock.unlock()
+        }
+    }
+}
+
+private enum EnginePlayerError: LocalizedError {
+    case cannotStart
+    case sourceTooLong
+
+    var errorDescription: String? {
+        switch self {
+        case .cannotStart:
+            return "音频输出设备无法启动。"
+        case .sourceTooLong:
+            return "原生音频时间轴异常过长。"
         }
     }
 }

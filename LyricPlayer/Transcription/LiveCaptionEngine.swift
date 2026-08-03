@@ -8,10 +8,12 @@ import FluidAudio
 #endif
 
 /// 一条已定稿的实时字幕。
-struct CaptionEntry: Identifiable, Hashable {
+struct CaptionEntry: Identifiable, Hashable, Sendable {
     let id = UUID()
     let date: Date
     var text: String
+    /// 目标语言译文；原文始终保留。
+    var translatedText: String? = nil
     /// 说话人编号（1 起）；说话人分离未就绪时为 nil。
     var speaker: Int?
     /// 该句在麦克风音频流中的时间范围（秒），用于与说话人分段对齐。
@@ -26,6 +28,19 @@ enum LiveCaptionState: Equatable {
     case starting
     case listening
     case error(String)
+}
+
+enum MeetingSummaryState: Equatable {
+    case idle
+    case generating(String)
+    case ready
+    case failed(String)
+}
+
+private struct MeetingSummarySource: Equatable {
+    let id: UUID
+    let text: String
+    let speaker: Int?
 }
 
 /// 麦克风实时会议转写：流式识别文本 + 说话人分离（谁在说话）。
@@ -48,6 +63,11 @@ final class LiveCaptionSession {
     var speakerCount: Int = 0
     /// 本次聆听开始时刻（时长计时用）。
     var startedAt: Date?
+    var captionTranslationState: BilingualTranslationState = .idle
+    var captionTranslationTarget: String?
+    var meetingSummary: MeetingSummary?
+    var meetingSummaryState: MeetingSummaryState = .idle
+    private var meetingSummarySource: [MeetingSummarySource] = []
 
     @ObservationIgnored private let audioEngine = AVAudioEngine()
     // 会话代号：主线程写、音频 tap 线程与后台任务读，所有访问一律过 genLock
@@ -58,6 +78,9 @@ final class LiveCaptionSession {
     // start() 的启动流程句柄：stop() 时取消，配合提交段检查，
     // 杜绝"启动中被停止后引擎照样把麦克风打开"的隐私泄漏
     @ObservationIgnored private var startTask: Task<Void, Never>?
+    @ObservationIgnored private var summaryTask: Task<Void, Never>?
+    @ObservationIgnored private var summaryGeneration = 0
+    @ObservationIgnored private var translatedCaptionIDs: Set<UUID> = []
 
     // macOS 26 路径持有的对象（用 AnyObject 存以避免可用性标注扩散）
     @ObservationIgnored private var modernBackend: AnyObject?
@@ -78,6 +101,11 @@ final class LiveCaptionSession {
     private static let diarMaxSeconds = 15.0 * 60                    // 缓冲上限 15 分钟
 
     var isListening: Bool { state == .listening || state == .starting }
+
+    var isMeetingSummaryStale: Bool {
+        guard meetingSummary != nil else { return false }
+        return meetingSummarySource != Self.summarySource(from: entries)
+    }
 
     // MARK: - 开始 / 停止
 
@@ -278,9 +306,104 @@ final class LiveCaptionSession {
     // MARK: - 文本操作
 
     func clear() {
+        summaryTask?.cancel()
+        summaryTask = nil
+        summaryGeneration += 1
         entries.removeAll()
         volatileText = ""
         statusText = ""
+        captionTranslationState = .idle
+        captionTranslationTarget = nil
+        translatedCaptionIDs.removeAll()
+        meetingSummary = nil
+        meetingSummaryState = .idle
+        meetingSummarySource = []
+    }
+
+    func clearCaptionTranslations() {
+        for index in entries.indices { entries[index].translatedText = nil }
+        captionTranslationState = .idle
+        captionTranslationTarget = nil
+        translatedCaptionIDs.removeAll()
+    }
+
+    func beginCaptionTranslation(target: String) {
+        if captionTranslationTarget != target {
+            for index in entries.indices { entries[index].translatedText = nil }
+            translatedCaptionIDs.removeAll()
+        }
+        captionTranslationTarget = target
+        captionTranslationState = .translating
+    }
+
+    func captionEntriesNeedingTranslation(target: String) -> [CaptionEntry] {
+        guard captionTranslationTarget == target else { return entries }
+        return entries.filter { !translatedCaptionIDs.contains($0.id) }
+    }
+
+    func applyCaptionTranslation(_ translation: String?, to id: UUID, target: String) {
+        guard captionTranslationTarget == target else { return }
+        translatedCaptionIDs.insert(id)
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[index].translatedText = translation
+    }
+
+    func finishCaptionTranslation(target: String) {
+        guard captionTranslationTarget == target else { return }
+        captionTranslationState = .done
+    }
+
+    func suspendCaptionTranslation() {
+        if captionTranslationState == .translating {
+            captionTranslationState = .idle
+        }
+    }
+
+    func generateSummary() {
+        guard !entries.isEmpty else {
+            meetingSummaryState = .failed(MeetingSummaryError.noTranscript.localizedDescription)
+            return
+        }
+
+        summaryTask?.cancel()
+        summaryGeneration += 1
+        let generation = summaryGeneration
+        let snapshot = entries
+        let source = Self.summarySource(from: snapshot)
+        meetingSummaryState = .generating("正在准备摘要…")
+
+        summaryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let summary = try await MeetingSummarizer.summarize(entries: snapshot) { [weak self] message in
+                    Task { @MainActor in
+                        guard let self, self.summaryGeneration == generation else { return }
+                        self.meetingSummaryState = .generating(message)
+                    }
+                }
+                try Task.checkCancellation()
+                guard self.summaryGeneration == generation else { return }
+                self.meetingSummary = summary
+                self.meetingSummarySource = source
+                self.meetingSummaryState = .ready
+            } catch is CancellationError {
+                // 清空或重新生成会取消旧任务
+            } catch {
+                guard self.summaryGeneration == generation else { return }
+                self.meetingSummaryState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func copySummary() {
+        guard let meetingSummary else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(meetingSummary.plainText, forType: .string)
+    }
+
+    private static func summarySource(from entries: [CaptionEntry]) -> [MeetingSummarySource] {
+        entries.map { MeetingSummarySource(id: $0.id, text: $0.text, speaker: $0.speaker) }
     }
 
     var transcriptText: String {
@@ -288,7 +411,8 @@ final class LiveCaptionSession {
         formatter.dateFormat = "HH:mm:ss"
         return entries.map { entry in
             let who = entry.speaker.map { "说话人\($0)：" } ?? ""
-            return "[\(formatter.string(from: entry.date))] \(who)\(entry.text)"
+            let translation = entry.translatedText.map { "\n    \($0)" } ?? ""
+            return "[\(formatter.string(from: entry.date))] \(who)\(entry.text)\(translation)"
         }.joined(separator: "\n")
     }
 

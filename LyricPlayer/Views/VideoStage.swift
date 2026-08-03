@@ -1,14 +1,15 @@
 import SwiftUI
 import AVKit
 
-/// 视频舞台：系统原生悬浮控制条（QuickTime 同款 HUD：音量/走带/画中画/共享/倍速，
-/// 自动隐藏、随鼠标浮现）+ 底部自动字幕叠加。
+/// 视频舞台：原生视频使用 QuickTime 同款 HUD，FFmpeg 视频使用自绘走带控制；
+/// 两条路径都在画面底部叠加自动字幕。
 struct VideoStage: View {
     @Environment(PlayerModel.self) private var model
+    @Environment(TranslationSettings.self) private var translationSettings
 
     var body: some View {
         ZStack {
-            if model.currentTrack?.needsFFmpeg == true {
+            if model.usesFFmpegPlayback {
                 // FFmpeg（KSPlayer）画面：无模糊垫层，纯黑底 + 铺满的原生渲染视图
                 Color.black
                 FFmpegVideoView(view: model.ffmpegPlayerView)
@@ -25,6 +26,9 @@ struct VideoStage: View {
         }
         .clipped()
         .ignoresSafeArea()   // 画面直通标题栏之下，全透明沉浸
+        .overlay(alignment: .topTrailing) {
+            if model.showLyrics { translationControl }
+        }
     }
 
     // MARK: - 字幕叠加
@@ -35,16 +39,26 @@ struct VideoStage: View {
             Spacer()
             Group {
                 if let index = model.currentLineIndex, model.lyricLines.indices.contains(index) {
-                    Text(model.lyricLines[index].text)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.9), radius: 2, y: 1)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .id(index)
-                        .transition(.opacity)
+                    let line = model.lyricLines[index]
+                    VStack(spacing: 3) {
+                        Text(line.text)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
+                        if translationSettings.lyricsEnabled,
+                           model.lyricsTranslationTarget == translationSettings.targetIdentifier,
+                           let translated = model.translatedLyrics[line.id] {
+                            Text(translated)
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.78))
+                        }
+                    }
+                    .shadow(color: .black.opacity(0.9), radius: 2, y: 1)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .id(index)
+                    .transition(.opacity)
                 } else if case .recognizing(let fraction, let message) = model.lyricsStatus,
                           model.lyricLines.isEmpty {
                     HStack(spacing: 8) {
@@ -59,9 +73,37 @@ struct VideoStage: View {
                 }
             }
             .animation(.easeOut(duration: 0.18), value: model.currentLineIndex)
-            .padding(.bottom, 24)   // 字幕贴底；悬浮 HUD 出现时叠于其上方区域
+            .padding(.bottom, model.usesFFmpegPlayback ? 88 : 24)
         }
         .allowsHitTesting(false)
+    }
+
+    private var translationControl: some View {
+        @Bindable var settings = translationSettings
+        return Menu {
+            Toggle("显示双语字幕", isOn: $settings.lyricsEnabled)
+            Picker("译为", selection: $settings.targetIdentifier) {
+                ForEach(settings.supportedLanguages) { language in
+                    Text(language.name).tag(language.id)
+                }
+            }
+            if case .failed(let message) = model.lyricsTranslationState {
+                Divider()
+                Text(message)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if model.lyricsTranslationState == .translating {
+                    ProgressView().controlSize(.small)
+                }
+                Image(systemName: settings.lyricsEnabled ? "captions.bubble.fill" : "captions.bubble")
+            }
+        }
+        .buttonStyle(.glass)
+        .controlSize(.small)
+        .help(settings.lyricsEnabled ? "关闭双语字幕" : "使用系统翻译显示双语字幕")
+        .padding(.top, 34)
+        .padding(.trailing, 14)
     }
 
     private func subtitleStatusText(fraction: Double?, message: String?) -> String {

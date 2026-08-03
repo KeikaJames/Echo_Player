@@ -1,12 +1,18 @@
 import SwiftUI
 import AppKit
+import Translation
 
 /// 实时会议转写窗口：深色玻璃浮窗（系统"实时字幕"的质感）。
 /// 说话人头像 + 分组气泡（连续同人发言合并）、呼吸录音点 + 时长计时、
 /// Liquid Glass 控制按钮；文本与说话人分离全部本地完成。
 struct LiveCaptionsView: View {
+    @Environment(TranslationSettings.self) private var translationSettings
     /// 共享会话：关窗只停止聆听，记录保留，重开窗口可继续查看/导出。
     private var session = LiveCaptionSession.shared
+    @State private var translationConfiguration: TranslationSession.Configuration?
+    @State private var captionTranslationGroup: TranslationGroup?
+    @State private var captionTranslationWarning: String?
+    @State private var showsSummary = false
 
     /// 说话人配色（按出现顺序循环使用）。
     static let speakerColors: [Color] = [
@@ -29,8 +35,40 @@ struct LiveCaptionsView: View {
         .background(.ultraThinMaterial)            // 整窗玻璃
         .background(CaptionsWindowStyler())        // 透明标题栏，玻璃直通到顶
         .environment(\.colorScheme, .dark)
-        .onAppear { session.start() }
-        .onDisappear { session.stop() }
+        .onAppear {
+            session.start()
+            requestCaptionTranslation()
+        }
+        .onDisappear {
+            translationConfiguration = nil
+            captionTranslationGroup = nil
+            session.suspendCaptionTranslation()
+            session.stop()
+        }
+        .translationTask(translationConfiguration) { translationSession in
+            await translateCaptions(using: translationSession)
+        }
+        .onChange(of: session.entries.count) { _, _ in requestCaptionTranslation() }
+        .onChange(of: translationSettings.captionsEnabled) { _, enabled in
+            if enabled {
+                requestCaptionTranslation()
+            } else {
+                translationConfiguration = nil
+                captionTranslationGroup = nil
+                captionTranslationWarning = nil
+                session.clearCaptionTranslations()
+            }
+        }
+        .onChange(of: translationSettings.targetIdentifier) { _, _ in
+            captionTranslationGroup = nil
+            captionTranslationWarning = nil
+            session.clearCaptionTranslations()
+            requestCaptionTranslation()
+        }
+        .task { await translationSettings.loadSupportedLanguages() }
+        .sheet(isPresented: $showsSummary) {
+            MeetingSummaryView(session: session)
+        }
     }
 
     // MARK: - 顶部：状态与计时
@@ -163,12 +201,22 @@ struct LiveCaptionsView: View {
                         .foregroundStyle(.quaternary)
                 }
                 ForEach(group.texts) { entry in
-                    Text(entry.text)
-                        .font(.system(size: 16))
-                        .foregroundStyle(.primary.opacity(0.92))
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(entry.text)
+                            .font(.system(size: 16))
+                            .foregroundStyle(.primary.opacity(0.92))
+                            .lineSpacing(3)
+                        if translationSettings.captionsEnabled,
+                           session.captionTranslationTarget == translationSettings.targetIdentifier,
+                           let translated = entry.translatedText {
+                            Text(translated)
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                                .lineSpacing(3)
+                        }
+                    }
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -216,6 +264,21 @@ struct LiveCaptionsView: View {
 
                 Spacer()
 
+                translationMenu
+
+                Button {
+                    showsSummary = true
+                    if (session.meetingSummary == nil || session.isMeetingSummaryStale),
+                       !isGeneratingSummary {
+                        session.generateSummary()
+                    }
+                } label: {
+                    Image(systemName: "sparkles")
+                }
+                .buttonStyle(.glass)
+                .help(summaryButtonHelp)
+                .disabled(session.entries.isEmpty)
+
                 Button { session.copyAll() } label: {
                     Image(systemName: "doc.on.doc")
                 }
@@ -247,6 +310,135 @@ struct LiveCaptionsView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    private var translationMenu: some View {
+        @Bindable var settings = translationSettings
+        return Menu {
+            Toggle("显示双语字幕", isOn: $settings.captionsEnabled)
+            Picker("译为", selection: $settings.targetIdentifier) {
+                ForEach(settings.supportedLanguages) { language in
+                    Text(language.name).tag(language.id)
+                }
+            }
+            if case .failed(let message) = session.captionTranslationState {
+                Divider()
+                Text(message)
+            }
+        } label: {
+            if session.captionTranslationState == .translating {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: settings.captionsEnabled ? "character.bubble.fill" : "character.bubble")
+            }
+        }
+        .buttonStyle(.glass)
+        .help(captionTranslationHelp)
+    }
+
+    private var captionTranslationHelp: String {
+        if case .failed(let message) = session.captionTranslationState { return message }
+        return translationSettings.captionsEnabled
+            ? "关闭双语字幕（当前译为\(translationSettings.targetName)）"
+            : "使用系统翻译显示双语字幕"
+    }
+
+    private var isGeneratingSummary: Bool {
+        if case .generating = session.meetingSummaryState { return true }
+        return false
+    }
+
+    private var summaryButtonHelp: String {
+        guard session.meetingSummary != nil else { return "生成会议摘要" }
+        return session.isMeetingSummaryStale ? "更新会议摘要" : "查看会议摘要"
+    }
+
+    // MARK: - 双语字幕
+
+    private func requestCaptionTranslation() {
+        guard translationSettings.captionsEnabled, !session.entries.isEmpty else {
+            translationConfiguration = nil
+            captionTranslationGroup = nil
+            if session.entries.isEmpty { captionTranslationWarning = nil }
+            return
+        }
+
+        let targetID = translationSettings.targetIdentifier
+        if session.captionTranslationState == .translating,
+           session.captionTranslationTarget == targetID { return }
+
+        let target = translationSettings.targetLanguage
+        let items = session.captionEntriesNeedingTranslation(target: targetID)
+            .map { TranslationItem(id: $0.id, text: $0.text) }
+        let speechSource = Locale.Language(identifier: AutoTranscriber.systemLocale().identifier)
+        let plan = BilingualTranslator.plan(for: items, target: target, knownSource: speechSource)
+        session.beginCaptionTranslation(target: targetID)
+        for id in plan.skippedIDs {
+            session.applyCaptionTranslation(nil, to: id, target: targetID)
+        }
+
+        guard let group = plan.groups.first else {
+            translationConfiguration = nil
+            captionTranslationGroup = nil
+            if let warning = captionTranslationWarning {
+                session.captionTranslationState = .failed(warning)
+            } else {
+                session.finishCaptionTranslation(target: targetID)
+            }
+            return
+        }
+        captionTranslationGroup = group
+
+        let source = group.sourceLanguage
+        let configuration: TranslationSession.Configuration
+        if #available(macOS 26.4, *) {
+            configuration = TranslationSession.Configuration(source: source, target: target,
+                                                               preferredStrategy: .lowLatency)
+        } else {
+            configuration = TranslationSession.Configuration(source: source, target: target)
+        }
+        if translationConfiguration?.source != source || translationConfiguration?.target != target {
+            translationConfiguration = configuration
+        } else {
+            translationConfiguration?.invalidate()
+        }
+    }
+
+    private func translateCaptions(using translationSession: TranslationSession) async {
+        guard let group = captionTranslationGroup else { return }
+        let target = translationSettings.targetIdentifier
+        let groupID = group.id
+        do {
+            _ = try await BilingualTranslator.translate(group.items, using: translationSession) { id, text in
+                guard captionTranslationGroup?.id == groupID,
+                      translationSettings.captionsEnabled,
+                      translationSettings.targetIdentifier == target else { return }
+                session.applyCaptionTranslation(text, to: id, target: target)
+            }
+            try Task.checkCancellation()
+            guard translationSettings.captionsEnabled,
+                  captionTranslationGroup?.id == groupID,
+                  translationSettings.targetIdentifier == target else { return }
+            session.finishCaptionTranslation(target: target)
+            captionTranslationGroup = nil
+            requestCaptionTranslation()
+        } catch is CancellationError {
+            // 语言变化会取消旧任务，已提交的逐句结果会保留
+        } catch let error as BilingualTranslationError {
+            guard captionTranslationGroup?.id == groupID,
+                  translationSettings.targetIdentifier == target else { return }
+            for item in group.items {
+                session.applyCaptionTranslation(nil, to: item.id, target: target)
+            }
+            captionTranslationWarning = error.localizedDescription
+            session.finishCaptionTranslation(target: target)
+            captionTranslationGroup = nil
+            requestCaptionTranslation()
+        } catch {
+            guard captionTranslationGroup?.id == groupID,
+                  translationSettings.targetIdentifier == target else { return }
+            session.captionTranslationState = .failed(error.localizedDescription)
+        }
     }
 }
 

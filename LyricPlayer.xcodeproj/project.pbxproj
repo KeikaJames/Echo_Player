@@ -14,6 +14,7 @@
 
 /* Begin PBXFileReference section */
 		A100000000000000000000A2 /* LyricPlayer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LyricPlayer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E40000000000000000000001 /* LyricPlayerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LyricPlayerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -39,6 +40,11 @@
 			path = LyricPlayer;
 			sourceTree = "<group>";
 		};
+		E40000000000000000000002 /* LyricPlayerTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LyricPlayerTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +58,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E40000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -59,6 +72,7 @@
 			isa = PBXGroup;
 			children = (
 				A100000000000000000000A1 /* LyricPlayer */,
+				E40000000000000000000002 /* LyricPlayerTests */,
 				A100000000000000000000A5 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -67,11 +81,22 @@
 			isa = PBXGroup;
 			children = (
 				A100000000000000000000A2 /* LyricPlayer.app */,
+				E40000000000000000000001 /* LyricPlayerTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
+
+/* Begin PBXContainerItemProxy section */
+		E40000000000000000000004 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A100000000000000000000AA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A100000000000000000000A6;
+			remoteInfo = LyricPlayer;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXNativeTarget section */
 		A100000000000000000000A6 /* LyricPlayer */ = {
@@ -100,6 +125,29 @@
 			productReference = A100000000000000000000A2 /* LyricPlayer.app */;
 			productType = "com.apple.product-type.application";
 		};
+		E40000000000000000000005 /* LyricPlayerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E40000000000000000000006 /* Build configuration list for PBXNativeTarget "LyricPlayerTests" */;
+			buildPhases = (
+				E40000000000000000000007 /* Sources */,
+				E40000000000000000000003 /* Frameworks */,
+				E40000000000000000000008 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E40000000000000000000009 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E40000000000000000000002 /* LyricPlayerTests */,
+			);
+			name = LyricPlayerTests;
+			packageProductDependencies = (
+			);
+			productName = LyricPlayerTests;
+			productReference = E40000000000000000000001 /* LyricPlayerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -112,6 +160,10 @@
 				TargetAttributes = {
 					A100000000000000000000A6 = {
 						CreatedOnToolsVersion = 16.2;
+					};
+					E40000000000000000000005 = {
+						CreatedOnToolsVersion = 26.4;
+						TestTargetID = A100000000000000000000A6;
 					};
 				};
 			};
@@ -136,6 +188,7 @@
 			projectRoot = "";
 			targets = (
 				A100000000000000000000A6 /* LyricPlayer */,
+				E40000000000000000000005 /* LyricPlayerTests */,
 			);
 		};
 /* End PBXProject section */
@@ -148,23 +201,54 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E40000000000000000000008 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		C200000000000000000000C4 /* Deepen FFmpeg frameworks */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Libavcodec.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Libavdevice.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Libavfilter.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Libavformat.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Libavutil.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Libswresample.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/Libswscale.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/gmp.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/gnutls.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/hogweed.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/lcms2.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libass.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libbluray.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libdav1d.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libfontconfig.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libfreetype.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libfribidi.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libharfbuzz.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libplacebo.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libshaderc_combined.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libsmbclient.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libsrt.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libzvbi.framework",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/nettle.framework",
 			);
 			name = "Deepen FFmpeg frameworks";
 			outputPaths = (
+				"$(DERIVED_FILE_DIR)/ffmpeg-frameworks-deepened",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "# FFmpegKit 的 xcframework 在 macOS 上是 shallow bundle（Info.plist 与二进制在根部），\n# 而 macOS 内嵌 framework 必须是 deep（Versions/A/...），否则 Xcode 的 Validate 阶段报错。\n# 这里把内嵌进 app 的每个 framework 就地转换为 deep 结构并重签名。\nset -euo pipefail\nFW_DIR=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\n[ -d \"$FW_DIR\" ] || exit 0\nIDENT=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\nshopt -s nullglob\nfor fw in \"$FW_DIR\"/*.framework; do\n  name=\"$(basename \"$fw\" .framework)\"\n  [ -d \"$fw/Versions\" ] && continue      # 已是 deep\n  [ -f \"$fw/$name\" ] || continue          # 无同名二进制则跳过\n  mkdir -p \"$fw/Versions/A/Resources\"\n  mv \"$fw/$name\" \"$fw/Versions/A/$name\"\n  [ -f \"$fw/Info.plist\" ] && mv \"$fw/Info.plist\" \"$fw/Versions/A/Resources/Info.plist\"\n  [ -d \"$fw/Headers\" ] && mv \"$fw/Headers\" \"$fw/Versions/A/Headers\"\n  [ -d \"$fw/Modules\" ] && mv \"$fw/Modules\" \"$fw/Versions/A/Modules\"\n  rm -rf \"$fw/_CodeSignature\"\n  ln -sfn A \"$fw/Versions/Current\"\n  ln -sfn \"Versions/Current/$name\" \"$fw/$name\"\n  ln -sfn Versions/Current/Resources \"$fw/Resources\"\n  [ -d \"$fw/Versions/A/Headers\" ] && ln -sfn Versions/Current/Headers \"$fw/Headers\"\n  [ -d \"$fw/Versions/A/Modules\" ] && ln -sfn Versions/Current/Modules \"$fw/Modules\"\n  /usr/bin/codesign --force --sign \"$IDENT\" --timestamp=none \"$fw\"\ndone\n";
+			shellScript = "# FFmpegKit 的 xcframework 在 macOS 上是 shallow bundle（Info.plist 与二进制在根部），\n# 而 macOS 内嵌 framework 必须是 deep（Versions/A/...），否则 Xcode 的 Validate 阶段报错。\n# 每个内嵌 framework 均声明为 Input，确保 SwiftPM Copy 全部完成后才执行。\n# 这里把内嵌进 app 的每个 framework 就地转换为 deep 结构并重签名。\nset -euo pipefail\nFW_DIR=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}\"\n[ -d \"$FW_DIR\" ] || exit 0\nIDENT=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\nshopt -s nullglob\nfor fw in \"$FW_DIR\"/*.framework; do\n  name=\"$(basename \"$fw\" .framework)\"\n  [ -d \"$fw/Versions\" ] && continue      # 已是 deep\n  [ -f \"$fw/$name\" ] || continue          # 无同名二进制则跳过\n  mkdir -p \"$fw/Versions/A/Resources\"\n  mv \"$fw/$name\" \"$fw/Versions/A/$name\"\n  [ -f \"$fw/Info.plist\" ] && mv \"$fw/Info.plist\" \"$fw/Versions/A/Resources/Info.plist\"\n  [ -d \"$fw/Headers\" ] && mv \"$fw/Headers\" \"$fw/Versions/A/Headers\"\n  [ -d \"$fw/Modules\" ] && mv \"$fw/Modules\" \"$fw/Versions/A/Modules\"\n  rm -rf \"$fw/_CodeSignature\"\n  ln -sfn A \"$fw/Versions/Current\"\n  ln -sfn \"Versions/Current/$name\" \"$fw/$name\"\n  ln -sfn Versions/Current/Resources \"$fw/Resources\"\n  [ -d \"$fw/Versions/A/Headers\" ] && ln -sfn Versions/Current/Headers \"$fw/Headers\"\n  [ -d \"$fw/Versions/A/Modules\" ] && ln -sfn Versions/Current/Modules \"$fw/Modules\"\n  /usr/bin/codesign --force --sign \"$IDENT\" --timestamp=none \"$fw\"\ndone\ntouch \"$SCRIPT_OUTPUT_FILE_0\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -176,7 +260,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E40000000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E40000000000000000000009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A100000000000000000000A6 /* LyricPlayer */;
+			targetProxy = E40000000000000000000004 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A100000000000000000000AC /* Debug */ = {
@@ -280,6 +379,36 @@
 			};
 			name = Release;
 		};
+		E4000000000000000000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.LyricPlayerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LyricPlayer.app/Contents/MacOS/LyricPlayer";
+			};
+			name = Debug;
+		};
+		E4000000000000000000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.LyricPlayerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LyricPlayer.app/Contents/MacOS/LyricPlayer";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -297,6 +426,15 @@
 			buildConfigurations = (
 				A100000000000000000000AC /* Debug */,
 				A100000000000000000000AD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E40000000000000000000006 /* Build configuration list for PBXNativeTarget "LyricPlayerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E4000000000000000000000A /* Debug */,
+				E4000000000000000000000B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

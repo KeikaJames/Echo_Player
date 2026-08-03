@@ -39,9 +39,9 @@ enum TranscriptionError: LocalizedError {
 ///    语言由模型直接从音频检测，无需任何人工选择。
 enum AutoTranscriber {
     static func transcribe(url: URL, onUpdate: @escaping TranscriptionUpdateHandler) async throws -> [LyricLine] {
-        // FFmpeg 专属格式（mkv/webm/opus/ape/wma…）AVAudioFile 打不开：识别管线
-        // 全程依赖 AVAudioFile/AVAudioEngine，这里直接返回空，避免崩溃或卡死。
-        guard (try? AVAudioFile(forReading: url)) != nil else { return [] }
+        guard (try? AVAudioFile(forReading: url)) != nil else {
+            throw TranscriptionError.cannotReadAudio
+        }
 
         let locale = systemLocale()
         let duration = audioDuration(url: url)

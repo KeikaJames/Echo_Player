@@ -10,10 +10,12 @@ enum UpdateChecker {
     /// 调试用覆盖：`defaults write <bundle-id> UpdateRepositoryOverride 某仓库`
     /// 可在不改包的情况下对沙盒仓库做更新链路端到端测试。
     static var repoSlug: String {
+        #if DEBUG
         if let override = UserDefaults.standard.string(forKey: "UpdateRepositoryOverride"),
            !override.isEmpty {
             return override
         }
+        #endif
         return (Bundle.main.object(forInfoDictionaryKey: "UpdateRepository") as? String)?
             .trimmingCharacters(in: .whitespaces) ?? ""
     }
@@ -39,14 +41,19 @@ enum UpdateChecker {
         }
     }
 
+    private struct UpdateAsset {
+        let url: URL
+        let size: Int64?
+    }
+
     /// 从发布资产中挑更新包：优先带 Echo 字样的 .zip，其次任意 .zip；
     /// 地址必须过可信来源检查（github.com HTTPS）。
-    private static func pickUpdateAsset(_ release: Release) -> URL? {
+    private static func pickUpdateAsset(_ release: Release) -> UpdateAsset? {
         let zips = (release.assets ?? []).filter { $0.name.lowercased().hasSuffix(".zip") }
         let preferred = zips.first { $0.name.lowercased().contains("echo") } ?? zips.first
         guard let preferred, let url = URL(string: preferred.browser_download_url),
               UpdateInstaller.isTrustedSource(url) else { return nil }
-        return url
+        return UpdateAsset(url: url, size: preferred.size.flatMap { $0 > 0 ? Int64($0) : nil })
     }
 
     /// 从发布说明里提取 SHA-256 指纹（CI 发版时自动写入，形如 `SHA256: ab12…`）。
@@ -60,6 +67,7 @@ enum UpdateChecker {
 
     /// 启动时静默检查（未配置仓库或 24 小时内查过则跳过）。
     static func autoCheck() {
+        UpdateInstaller.removeAbandonedTemporaryFiles()
         guard isConfigured else { return }
         let last = UserDefaults.standard.double(forKey: lastCheckKey)
         guard Date().timeIntervalSince1970 - last > 24 * 3600 else { return }
@@ -108,20 +116,23 @@ enum UpdateChecker {
                 alert.informativeText = informative
                 let page = URL(string: release.html_url)
                 let asset = pickUpdateAsset(release)
-                if asset != nil {
+                let sha256 = sha256FromNotes(release.body)
+                if asset != nil, sha256 != nil {
                     alert.addButton(withTitle: "自动更新")
                     alert.addButton(withTitle: "前往发布页")
                 } else {
-                    alert.addButton(withTitle: "前往下载")   // 该发布没有可用 zip 资产
+                    // 缺 zip 或缺发布指纹时只开放手动路径，自动安装必须 fail closed。
+                    alert.addButton(withTitle: "前往下载")
                 }
                 alert.addButton(withTitle: "以后再说")
                 let response = alert.runModal()
 
-                if let asset {
+                if let asset, let sha256 {
                     switch response {
                     case .alertFirstButtonReturn:
-                        UpdateInstaller.shared.install(from: asset,
-                                                       expectedSHA256: sha256FromNotes(release.body),
+                        UpdateInstaller.shared.install(from: asset.url,
+                                                       expectedSHA256: sha256,
+                                                       expectedDownloadSize: asset.size,
                                                        version: release.tag_name,
                                                        releasePageURL: page)
                     case .alertSecondButtonReturn:
