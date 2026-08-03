@@ -51,6 +51,18 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_26.app || sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
 
+      - name: 准备构建工具
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/bin"
+            cat > "$RUNNER_TEMP/bin/rg" <<'EOF'
+          #!/bin/bash
+          exec /usr/bin/grep -E "$@"
+          EOF
+            chmod +x "$RUNNER_TEMP/bin/rg"
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          fi
+
       - name: 内置 Whisper 模型
         env:
           MODEL_REVISION: 97a5bf9bbc74c7d9c12c755d04dea59e672e3808
@@ -79,6 +91,14 @@ jobs:
           test -f "$MODEL_DIR/openai_whisper-small/TextDecoder.mlmodelc/coremldata.bin"
           mkdir -p "LyricPlayer/Resources/WhisperModel"
           mv "$MODEL_DIR/openai_whisper-small" "LyricPlayer/Resources/WhisperModel/"
+
+      - name: 解析 Swift 依赖
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project LyricPlayer.xcodeproj \
+            -scheme LyricPlayer \
+            -clonedSourcePackagesDirPath "$GITHUB_WORKSPACE/build/SourcePackages" \
+            -onlyUsePackageVersionsFromResolvedFile
 
       - name: 运行测试
         run: |
