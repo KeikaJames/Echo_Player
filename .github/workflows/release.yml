@@ -155,8 +155,14 @@ jobs:
                 --draft=false
             else
               jq -e --arg zip "$ZIP_NAME" '
-                ((.body // "") | test("(^|\\n)SHA256: [0-9a-fA-F]{64}(\\n|$)")) and
-                any((.assets // [])[]; .name == $zip and .size > 0)
+                ((.body // "")
+                  | capture("(^|\\n)SHA256: (?<hash>[0-9a-fA-F]{64})(\\n|$)").hash
+                  | ascii_downcase) as $hash
+                | any((.assets // [])[];
+                    .name == $zip and
+                    .state == "uploaded" and
+                    .size > 0 and
+                    .digest == ("sha256:" + $hash))
               ' "$RELEASE_STATE" >/dev/null
             fi
           else

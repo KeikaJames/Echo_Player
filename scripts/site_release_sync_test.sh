@@ -42,7 +42,7 @@ if "$ROOT/scripts/sync_site_release.sh" "$WORK/foreign.json" "$WORK/rejected.jso
     exit 1
 fi
 
-for tag in 'v1.2;touch-pwn' 'v1.2$(touch-pwn)' 'v1.2/foo'; do
+for tag in 'v1.2+build.1' 'v1.2;touch-pwn' 'v1.2$(touch-pwn)' 'v1.2/foo'; do
     jq --arg tag "$tag" '.tag_name = $tag' "$WORK/release.json" > "$WORK/injected.json"
     if "$ROOT/scripts/sync_site_release.sh" "$WORK/injected.json" "$WORK/rejected.json" 2>/dev/null; then
         echo "site-release-sync-test: 接受了非法 tag: $tag" >&2

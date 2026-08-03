@@ -289,6 +289,7 @@
     list-style: none;
     border-top: 1px solid var(--hairline);
   }
+  .release-list:empty { display: none; }
   .release-list li {
     display: grid;
     grid-template-columns: 150px 1fr;
@@ -299,9 +300,7 @@
   .release-list h3 { font-size: 17px; font-weight: 600; }
   .release-list p { font-size: 15px; color: var(--muted); }
   .release-note { margin-top: 20px; color: var(--muted); font-size: 13px; }
-  .release-link { margin-left: 8px; }
   .release-link[hidden] { display: none; }
-  #release-note[hidden] + .release-link { margin-left: 0; }
   @media (max-width: 600px) {
     .release { padding-block: 80px; }
     .release-list { margin-top: 32px; }
@@ -397,32 +396,11 @@
     <div class="inner-narrow">
       <header class="release-head reveal">
         <p class="release-meta" id="release-meta">版本 1.1 预览 · <time datetime="2026-08-03">2026 年 8 月 3 日</time></p>
-        <h2 id="updates-title">双语字幕与会议摘要。</h2>
-        <p class="h2-sub" id="release-summary">下一版加入双语字幕和会议摘要，并提升播放、识别与更新稳定性。</p>
+        <h2 id="updates-title">增加了双语字幕，和一些常态化更新。</h2>
+        <p class="h2-sub" id="release-summary"></p>
       </header>
-      <ul class="release-list" id="release-list" role="list">
-        <li class="reveal" style="--d:.05s">
-          <h3>双语字幕</h3>
-          <p>歌词、视频字幕和实时字幕支持原文与译文同屏。</p>
-        </li>
-        <li class="reveal" style="--d:.10s">
-          <h3>本机会议摘要</h3>
-          <p>将会议记录整理为摘要、要点和待办。</p>
-        </li>
-        <li class="reveal" style="--d:.15s">
-          <h3>多格式播放</h3>
-          <p>改进多音轨、跳转与异常回退。</p>
-        </li>
-        <li class="reveal" style="--d:.20s">
-          <h3>语音识别</h3>
-          <p>提升长音频识别稳定性，完善进度与取消操作。</p>
-        </li>
-        <li class="reveal" style="--d:.25s">
-          <h3>应用内更新</h3>
-          <p>加强更新包校验，启动失败时可恢复原版本。</p>
-        </li>
-      </ul>
-      <p class="release-note reveal" style="--d:.3s"><span id="release-note">翻译可能需要下载语言包；会议摘要需要 Apple Intelligence。</span><a class="release-link" id="release-link" href="https://github.com/KeikaJames/Echo_Player/releases" hidden>查看完整更新说明</a></p>
+      <ul class="release-list" id="release-list" role="list"></ul>
+      <p class="release-note reveal" id="release-more" style="--d:.3s" hidden><a class="release-link" id="release-link" href="https://github.com/KeikaJames/Echo_Player/releases" hidden>查看完整更新说明</a></p>
     </div>
   </section>
 
@@ -588,7 +566,7 @@
 
       const notes = parseNotes(release.body);
       const sameFallback = release.tag === section.dataset.releaseTag;
-      const useNotes = notes.items.length && !(sameFallback && notes.generated);
+      const useNotes = notes.items.length && !sameFallback;
       if (useNotes || !sameFallback) {
         if (notes.title) document.getElementById("updates-title").textContent = notes.title;
         else if (!sameFallback) document.getElementById("updates-title").textContent = release.name;
@@ -610,10 +588,10 @@
           }));
       }
 
-      document.getElementById("release-note").hidden = true;
       const link = document.getElementById("release-link");
       link.href = release.url;
       link.hidden = false;
+      document.getElementById("release-more").hidden = false;
       section.dataset.releaseTag = release.tag;
     }
 

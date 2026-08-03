@@ -19,7 +19,7 @@ RELEASE_PREFIX="https://github.com/$REPOSITORY/releases/"
 jq -e --arg prefix "$RELEASE_PREFIX" '
     .draft == false and
     .prerelease == false and
-    (.tag_name | type == "string" and test("^v[0-9]+([.][0-9]+){1,2}([+-][0-9A-Za-z.-]+)?$")) and
+    (.tag_name | type == "string" and test("^v[0-9]+([.][0-9]+){1,2}$")) and
     (.name == null or (.name | type == "string" and length <= 160)) and
     (.published_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
     (.html_url | type == "string" and startswith($prefix + "tag/")) and
