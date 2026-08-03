@@ -1,4 +1,14 @@
 {
+  "asset": {
+    "name": "Echo.Player.v1.1.zip",
+    "size": 500274544,
+    "url": "https://github.com/KeikaJames/Echo_Player/releases/download/v1.1/Echo.Player.v1.1.zip"
+  },
+  "body": "SHA256: bb096bfbc06b991e7f27b1b78056824ad5644d1b913b327c09216c5ad8bb3b0f\n\n首次安装请看官网教程（未签名应用需右键→打开）：https://keikajames.github.io/Echo_Player/\n已安装用户无需操作——应用会自动提示更新。\n",
+  "name": "Echo Player v1.1",
+  "published_at": "2026-08-03T18:02:17Z",
   "schema": 1,
-  "status": "preview"
+  "status": "published",
+  "tag_name": "v1.1",
+  "url": "https://github.com/KeikaJames/Echo_Player/releases/tag/v1.1"
 }
