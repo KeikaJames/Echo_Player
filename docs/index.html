@@ -275,6 +275,38 @@
   @media (max-width: 720px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 36px 24px; } }
   @media (max-width: 440px) { .grid { grid-template-columns: 1fr; } }
 
+  .release .inner-narrow { max-width: 760px; }
+  .release h2, .release .h2-sub { text-align: left; }
+  .release-meta {
+    margin-bottom: 10px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .release-list {
+    margin-top: 40px;
+    list-style: none;
+    border-top: 1px solid var(--hairline);
+  }
+  .release-list:empty { display: none; }
+  .release-list li {
+    display: grid;
+    grid-template-columns: 150px 1fr;
+    gap: 24px;
+    padding: 22px 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .release-list h3 { font-size: 17px; font-weight: 600; }
+  .release-list p { font-size: 15px; color: var(--muted); }
+  .release-note { margin-top: 20px; color: var(--muted); font-size: 13px; }
+  .release-link[hidden] { display: none; }
+  @media (max-width: 600px) {
+    .release { padding-block: 80px; }
+    .release-list { margin-top: 32px; }
+    .release-list li { grid-template-columns: 1fr; gap: 4px; padding: 18px 0; }
+  }
+
   .steps { max-width: 560px; margin: 52px auto 0; }
   .step { display: grid; grid-template-columns: 34px 1fr; gap: 16px; padding: 22px 0; border-bottom: 1px solid var(--hairline); align-items: baseline; }
   .step:last-of-type { border-bottom: none; }
@@ -305,8 +337,8 @@
     <a class="brand" href="#"><img src="icon.png" alt="Echo Player 图标">Echo Player</a>
     <div class="links">
       <a href="#features">功能</a>
+      <a href="#updates">更新</a>
       <a href="#install">安装</a>
-      <a href="#contact">反馈</a>
       <a href="https://github.com/KeikaJames/Echo_Player">GitHub</a>
     </div>
   </div>
@@ -360,6 +392,18 @@
     </div>
   </div>
 
+  <section class="release" id="updates" aria-labelledby="updates-title" data-release-tag="v1.1">
+    <div class="inner-narrow">
+      <header class="release-head reveal">
+        <p class="release-meta" id="release-meta">版本 1.1 预览 · <time datetime="2026-08-03">2026 年 8 月 3 日</time></p>
+        <h2 id="updates-title">增加了双语字幕，和一些常态化更新。</h2>
+        <p class="h2-sub" id="release-summary"></p>
+      </header>
+      <ul class="release-list" id="release-list" role="list"></ul>
+      <p class="release-note reveal" id="release-more" style="--d:.3s" hidden><a class="release-link" id="release-link" href="https://github.com/KeikaJames/Echo_Player/releases" hidden>查看完整更新说明</a></p>
+    </div>
+  </section>
+
   <section class="alt" id="features">
     <div class="inner-narrow">
       <h2 class="reveal">会做的，都替你做了。</h2>
@@ -401,20 +445,169 @@
 </footer>
 
 <script>
-  // 下载按钮永远指向最新版
+  // 发布后由 webhook 写入 release.json；失败时仍可直接从 GitHub 获取。
   (async () => {
-    try {
-      const res = await fetch("https://api.github.com/repos/KeikaJames/Echo_Player/releases/latest");
-      if (!res.ok) return;
-      const rel = await res.json();
-      const zip = (rel.assets || []).find(a => a.name.toLowerCase().endsWith(".zip"));
-      if (rel.tag_name) document.getElementById("download-label").textContent = `下载 ${rel.tag_name}`;
-      if (zip) {
-        document.getElementById("download-btn").href = zip.browser_download_url;
-        document.getElementById("download-meta").textContent =
-          `macOS 26+ · Apple Silicon · ${Math.round(zip.size / 1048576)} MB · 免费开源`;
+    const repository = "KeikaJames/Echo_Player";
+    const apiURL = `https://api.github.com/repos/${repository}/releases/latest`;
+
+    function trustedURL(value, path) {
+      try {
+        const url = new URL(value);
+        return url.origin === "https://github.com" && url.pathname.startsWith(`/${repository}/${path}`) ? url.href : "";
+      } catch (_) { return ""; }
+    }
+
+    function clean(text) {
+      return text
+        .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .replace(/[*_`~]/g, "")
+        .replace(/<[^>]*>/g, "")
+        .trim();
+    }
+
+    function version(tag) {
+      const match = /^v(\d+)\.(\d+)(?:\.(\d+))?$/.exec(tag || "");
+      return match ? match.slice(1).map(n => Number(n || 0)) : null;
+    }
+
+    function notOlder(tag, fallback) {
+      const a = version(tag), b = version(fallback);
+      if (!a || !b) return tag === fallback;
+      for (let i = 0; i < 3; i++) {
+        if (a[i] !== b[i]) return a[i] > b[i];
       }
+      return true;
+    }
+
+    function parseNotes(body) {
+      const notes = { title: "", summary: "", items: [], plain: [], generated: false };
+      let section = "", lines = [];
+      const flush = () => {
+        const text = clean(lines.join(" "));
+        if (section && text) notes.items.push({ title: section, text });
+        section = ""; lines = [];
+      };
+
+      for (const raw of String(body || "").replace(/\r/g, "").split("\n")) {
+        const line = raw.trim();
+        if (!line || /^<!--/.test(line) || /^SHA-?256\s*:/i.test(line)) continue;
+        const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+        if (heading) {
+          flush();
+          const title = clean(heading[2]);
+          if (heading[1].length === 1 && !notes.title) notes.title = title;
+          else {
+            const generated = /^What's Changed$/i.test(title);
+            if (generated) notes.generated = true;
+            section = generated ? "更新内容" : title;
+          }
+          continue;
+        }
+        if (/^\*?\*?Full Changelog\*?\*?\s*:/i.test(line)) continue;
+        const bullet = /^[-*+]\s+(.+)$/.exec(line);
+        if (bullet && notes.generated && section === "更新内容") {
+          const text = clean(bullet[1]).replace(/\s+by\s+@\S+\s+in\s+https?:\/\/\S+$/i, "");
+          notes.items.push({ title: "更新", text });
+          continue;
+        }
+        if (bullet && !section) {
+          const text = clean(bullet[1]);
+          const split = /^([^：:—–]{1,24})[：:—–]\s*(.+)$/.exec(text);
+          notes.items.push(split ? { title: split[1], text: split[2] } : { title: "更新", text });
+          continue;
+        }
+        if (section) lines.push(line.replace(/^[-*+]\s+/, ""));
+        else notes.plain.push(clean(line));
+      }
+      flush();
+      notes.plain = notes.plain.filter(Boolean);
+      notes.summary = notes.plain.shift() || "";
+      return notes;
+    }
+
+    function normalize(data) {
+      if (!data || (data.status && data.status !== "published")) return null;
+      if (!version(data.tag_name)) return null;
+      const asset = data.asset || (data.assets || []).find(a => String(a.name || "").toLowerCase().endsWith(".zip"));
+      return {
+        tag: data.tag_name,
+        name: data.name || data.tag_name,
+        publishedAt: data.published_at,
+        url: trustedURL(data.url || data.html_url, "releases/"),
+        body: data.body || "",
+        asset: asset && {
+          url: trustedURL(asset.url || asset.browser_download_url, "releases/download/"),
+          size: Number(asset.size || 0)
+        }
+      };
+    }
+
+    function showDownload(release) {
+      if (release.tag) document.getElementById("download-label").textContent = `下载 ${release.tag}`;
+      if (!release.asset || !release.asset.url) return;
+      document.getElementById("download-btn").href = release.asset.url;
+      document.getElementById("download-meta").textContent =
+        `macOS 26+ · Apple Silicon · ${Math.round(release.asset.size / 1048576)} MB · 免费开源`;
+    }
+
+    function showNotes(release) {
+      const section = document.getElementById("updates");
+      if (!release.url || !release.publishedAt || !notOlder(release.tag, section.dataset.releaseTag)) return;
+
+      const date = new Date(release.publishedAt);
+      if (Number.isNaN(date.getTime())) return;
+      const time = document.createElement("time");
+      time.dateTime = release.publishedAt;
+      time.textContent = `${date.getFullYear()} 年 ${date.getMonth() + 1} 月 ${date.getDate()} 日`;
+      document.getElementById("release-meta").replaceChildren(
+        document.createTextNode(`版本 ${release.tag.replace(/^v/, "")} · `), time
+      );
+
+      const notes = parseNotes(release.body);
+      const sameFallback = release.tag === section.dataset.releaseTag;
+      const useNotes = notes.items.length && !sameFallback;
+      if (useNotes || !sameFallback) {
+        if (notes.title) document.getElementById("updates-title").textContent = notes.title;
+        else if (!sameFallback) document.getElementById("updates-title").textContent = release.name;
+        if (notes.summary) document.getElementById("release-summary").textContent = notes.summary;
+        else if (!sameFallback) document.getElementById("release-summary").hidden = true;
+
+        const plain = [notes.summary, ...notes.plain].filter(Boolean);
+        const items = notes.items.length ? notes.items : plain.map(text => ({ title: "更新说明", text }));
+        const list = document.getElementById("release-list");
+        list.replaceChildren(...(items.length ? items : [{ title: "更新说明", text: "完整内容请查看 GitHub Release。" }])
+          .slice(0, 12).map(item => {
+            const li = document.createElement("li");
+            const title = document.createElement("h3");
+            const text = document.createElement("p");
+            title.textContent = item.title.slice(0, 80);
+            text.textContent = item.text.slice(0, 1200);
+            li.append(title, text);
+            return li;
+          }));
+      }
+
+      const link = document.getElementById("release-link");
+      link.href = release.url;
+      link.hidden = false;
+      document.getElementById("release-more").hidden = false;
+      section.dataset.releaseTag = release.tag;
+    }
+
+    let release = null;
+    try {
+      const res = await fetch("release.json", { cache: "no-store" });
+      if (res.ok) release = normalize(await res.json());
     } catch (_) {}
+    try {
+      const res = await fetch(apiURL);
+      const online = res.ok ? normalize(await res.json()) : null;
+      if (online && (!release || notOlder(online.tag, release.tag))) release = online;
+    } catch (_) {}
+    if (!release) return;
+    showDownload(release);
+    showNotes(release);
   })();
 
   // Keynote 式浮现（普通章节）
