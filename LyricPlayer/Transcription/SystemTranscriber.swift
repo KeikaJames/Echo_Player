@@ -1,6 +1,7 @@
 import Foundation
 import Speech
 import AVFoundation
+import Darwin
 
 /// 系统引擎入口：优先 macOS 26 的 SpeechAnalyzer，失败时回退 SFSpeechRecognizer。
 enum SystemTranscriberChain {
@@ -73,23 +74,25 @@ struct ModernSystemTranscriber {
         }
 
         do {
-            try await withTaskCancellationHandler {
+            let words = try await withTaskCancellationHandler {
                 if let lastSampleTime = try await analyzer.analyzeSequence(from: file) {
                     try await analyzer.finalizeAndFinish(through: lastSampleTime)
                 } else {
                     await analyzer.cancelAndFinishNow()
                 }
+                let words = try await collector.value
+                try Task.checkCancellation()
+                return words
             } onCancel: {
+                collector.cancel()
                 Task { await analyzer.cancelAndFinishNow() }
             }
+            return LyricComposer.compose(words: words)
         } catch {
             collector.cancel()
+            await analyzer.cancelAndFinishNow()
             throw error
         }
-
-        let words = try await collector.value
-        try Task.checkCancellation()
-        return LyricComposer.compose(words: words)
     }
 
     /// 精确匹配失败时退到同语言的受支持地区（如 zh-Hans-CN → zh-CN）。
@@ -116,6 +119,34 @@ struct ModernSystemTranscriber {
 /// 服务器识别有约 1 分钟限制，因此把音频切成 55 秒片段逐段识别再拼接时间轴。
 struct LegacySystemTranscriber {
     private static let chunkSeconds = 55.0
+    private static let temporaryChunkPrefix = "lyric-chunk-"
+    private static let abandonedChunkCleanup: Void = {
+        let manager = FileManager.default
+        let directory = manager.temporaryDirectory
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let legacyDeadline = Date().addingTimeInterval(-24 * 60 * 60)
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey,
+                                        .contentModificationDateKey]
+        guard let files = try? manager.contentsOfDirectory(at: directory,
+                                                           includingPropertiesForKeys: Array(keys)) else { return }
+        for file in files {
+            let name = file.lastPathComponent
+            guard name.hasPrefix(temporaryChunkPrefix), name.hasSuffix(".caf") else { continue }
+            let values = try? file.resourceValues(forKeys: keys)
+            guard values?.isRegularFile == true || values?.isSymbolicLink == true else { continue }
+
+            let stem = name.dropFirst(temporaryChunkPrefix.count).dropLast(4)
+            if let separator = stem.firstIndex(of: "-"),
+               let pid = Int32(stem[..<separator]), pid > 0 {
+                guard pid != currentPID else { continue }
+                errno = 0
+                let isRunning = Darwin.kill(pid, 0) == 0 || errno == EPERM
+                if !isRunning { try? manager.removeItem(at: file) }
+            } else if let date = values?.contentModificationDate, date < legacyDeadline {
+                try? manager.removeItem(at: file)
+            }
+        }
+    }()
 
     func transcribe(url: URL, locale: Locale, onUpdate: @escaping TranscriptionUpdateHandler) async throws -> [LyricLine] {
         try await Self.requestAuthorization()
@@ -136,12 +167,16 @@ struct LegacySystemTranscriber {
             throw TranscriptionError.cannotReadAudio
         }
         let sampleRate = file.processingFormat.sampleRate
+        guard sampleRate.isFinite, sampleRate > 0 else {
+            throw TranscriptionError.cannotReadAudio
+        }
         let totalFrames = file.length
         let totalSeconds = Double(totalFrames) / sampleRate
         guard totalSeconds > 0.1 else { return [] }
 
         var allWords: [LyricWord] = []
-        let chunkFrames = AVAudioFramePosition(Self.chunkSeconds * sampleRate)
+        let chunkFrames = AVAudioFramePosition(min(Self.chunkSeconds * sampleRate,
+                                                   Double(AVAudioFrameCount.max)))
         var position: AVAudioFramePosition = 0
 
         while position < totalFrames {
@@ -179,25 +214,53 @@ struct LegacySystemTranscriber {
     }
 
     private static func requestAuthorization() async throws {
-        let status = await withCheckedContinuation { (cont: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
-            SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
+        let box = AuthorizationBox()
+        let status = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Error>) in
+                guard box.install(continuation) else { return }
+                SFSpeechRecognizer.requestAuthorization { status in
+                    box.resume(returning: status)
+                }
+            }
+        } onCancel: {
+            box.cancel()
         }
+        try Task.checkCancellation()
         guard status == .authorized else { throw TranscriptionError.notAuthorized }
     }
 
     /// 把源文件的一段导出为临时 CAF 文件。
     private static func writeChunk(from file: AVAudioFile, start: AVAudioFramePosition, frames: AVAudioFrameCount) throws -> URL {
+        _ = abandonedChunkCleanup
         let format = file.processingFormat
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
-            throw TranscriptionError.cannotReadAudio
-        }
-        file.framePosition = start
-        try file.read(into: buffer, frameCount: frames)
-
         let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lyric-chunk-\(UUID().uuidString).caf")
-        let outFile = try AVAudioFile(forWriting: tmpURL, settings: format.settings)
-        try outFile.write(from: buffer)
+            .appendingPathComponent("\(temporaryChunkPrefix)\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString).caf")
+        var completed = false
+        defer {
+            if !completed { try? FileManager.default.removeItem(at: tmpURL) }
+        }
+        let outFile = try AVAudioFile(forWriting: tmpURL,
+                                      settings: format.settings,
+                                      commonFormat: format.commonFormat,
+                                      interleaved: format.isInterleaved)
+        file.framePosition = start
+        var remaining = AVAudioFramePosition(frames)
+        while remaining > 0 {
+            try Task.checkCancellation()
+            let frameCount = AVAudioFrameCount(min(remaining, 131_072))
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                                frameCapacity: frameCount) else {
+                throw TranscriptionError.cannotReadAudio
+            }
+            try file.read(into: buffer, frameCount: frameCount)
+            guard buffer.frameLength > 0 else {
+                throw TranscriptionError.cannotReadAudio
+            }
+            try outFile.write(from: buffer)
+            remaining -= AVAudioFramePosition(buffer.frameLength)
+        }
+        completed = true
         return tmpURL
     }
 
@@ -211,6 +274,9 @@ struct LegacySystemTranscriber {
         let box = RecognitionBox()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[SFTranscriptionSegment], Error>) in
+                guard box.installCancellationHandler({
+                    cont.resume(throwing: CancellationError())
+                }) else { return }
                 let task = recognizer.recognitionTask(with: request) { result, error in
                     if let error {
                         let nsError = error as NSError
@@ -219,8 +285,6 @@ struct LegacySystemTranscriber {
                         box.resumeOnce {
                             if isNoSpeech {
                                 cont.resume(returning: [])
-                            } else if box.cancelled {
-                                cont.resume(throwing: CancellationError())
                             } else {
                                 cont.resume(throwing: error)
                             }
@@ -232,7 +296,7 @@ struct LegacySystemTranscriber {
                         cont.resume(returning: result.bestTranscription.segments)
                     }
                 }
-                box.task = task
+                box.install(task)
             }
         } onCancel: {
             box.cancel()
@@ -240,27 +304,108 @@ struct LegacySystemTranscriber {
     }
 }
 
+/// 首次权限弹窗不受 Swift Task 管理，这里负责让切歌取消立即恢复等待者。
+private final class AuthorizationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Error>?
+    private var cancelled = false
+    private var resumed = false
+
+    func install(_ continuation: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Error>) -> Bool {
+        lock.lock()
+        guard !cancelled else {
+            resumed = true
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
+
+    func resume(returning status: SFSpeechRecognizerAuthorizationStatus) {
+        lock.lock()
+        guard !resumed else {
+            lock.unlock()
+            return
+        }
+        resumed = true
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(returning: status)
+    }
+
+    func cancel() {
+        lock.lock()
+        guard !resumed else {
+            lock.unlock()
+            return
+        }
+        cancelled = true
+        guard let continuation else {
+            lock.unlock()
+            return
+        }
+        resumed = true
+        self.continuation = nil
+        lock.unlock()
+        continuation.resume(throwing: CancellationError())
+    }
+}
+
 /// 保护 continuation 只 resume 一次，并桥接取消。
 private final class RecognitionBox: @unchecked Sendable {
     private let lock = NSLock()
     private var resumed = false
-    private(set) var cancelled = false
-    var task: SFSpeechRecognitionTask?
+    private var cancelled = false
+    private var task: SFSpeechRecognitionTask?
+    private var cancellationHandler: (() -> Void)?
+
+    func installCancellationHandler(_ handler: @escaping () -> Void) -> Bool {
+        lock.lock()
+        guard !cancelled else {
+            resumed = true
+            lock.unlock()
+            handler()
+            return false
+        }
+        cancellationHandler = handler
+        lock.unlock()
+        return true
+    }
 
     func resumeOnce(_ body: () -> Void) {
         lock.lock()
-        defer { lock.unlock() }
-        guard !resumed else { return }
+        guard !resumed else {
+            lock.unlock()
+            return
+        }
         resumed = true
+        cancellationHandler = nil
+        lock.unlock()
         body()
+    }
+
+    func install(_ task: SFSpeechRecognitionTask) {
+        lock.lock()
+        let shouldCancel = cancelled
+        if !shouldCancel, !resumed { self.task = task }
+        lock.unlock()
+        if shouldCancel { task.cancel() }
     }
 
     func cancel() {
         lock.lock()
         cancelled = true
         let t = task
+        let handler = resumed ? nil : cancellationHandler
+        if handler != nil { resumed = true }
+        cancellationHandler = nil
         lock.unlock()
         t?.cancel()
+        handler?()
     }
 }
 

@@ -97,8 +97,9 @@ struct ContentView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if model.currentTrack?.isVideo != true {
-                TransportBar()   // 音频用自绘玻璃控制条；视频用系统原生悬浮 HUD
+            if model.currentTrack?.isVideo != true || model.usesFFmpegPlayback {
+                // 原生视频用 AVKit HUD；KSPlayer 只提供画面，仍需完整走带控制。
+                TransportBar()
             }
         }
 

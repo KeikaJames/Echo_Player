@@ -1,15 +1,15 @@
 import SwiftUI
 import AVKit
 
-/// 视频舞台：系统原生悬浮控制条（QuickTime 同款 HUD：音量/走带/画中画/共享/倍速，
-/// 自动隐藏、随鼠标浮现）+ 底部自动字幕叠加。
+/// 视频舞台：原生视频使用 QuickTime 同款 HUD，FFmpeg 视频使用自绘走带控制；
+/// 两条路径都在画面底部叠加自动字幕。
 struct VideoStage: View {
     @Environment(PlayerModel.self) private var model
     @Environment(TranslationSettings.self) private var translationSettings
 
     var body: some View {
         ZStack {
-            if model.currentTrack?.needsFFmpeg == true {
+            if model.usesFFmpegPlayback {
                 // FFmpeg（KSPlayer）画面：无模糊垫层，纯黑底 + 铺满的原生渲染视图
                 Color.black
                 FFmpegVideoView(view: model.ffmpegPlayerView)
@@ -73,7 +73,7 @@ struct VideoStage: View {
                 }
             }
             .animation(.easeOut(duration: 0.18), value: model.currentLineIndex)
-            .padding(.bottom, 24)   // 字幕贴底；悬浮 HUD 出现时叠于其上方区域
+            .padding(.bottom, model.usesFFmpegPlayback ? 88 : 24)
         }
         .allowsHitTesting(false)
     }

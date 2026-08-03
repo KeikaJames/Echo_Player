@@ -35,6 +35,7 @@ struct LyricPlayerApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var isRestoringPreviousVersion = false
 
     // MARK: - 启动
 
@@ -45,12 +46,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .aqua)
         // 窗口恢复的最后一道保险：本应用永不保存/恢复窗口状态（杜绝多窗口堆叠）
         UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+        isRestoringPreviousVersion = UpdateInstaller.shared.beginPendingUpdateLaunch()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !isRestoringPreviousVersion else { return }
         PlayerModel.shared.restoreState()
         UpdateChecker.autoCheck()
         GlowHaloController.shared.enabled = PlayerModel.shared.glowEnabled
+        UpdateInstaller.shared.confirmPendingUpdateLaunchAfterHealthCheck()
 
         // 主窗口就绪后：挂接窗外光晕、chrome 自动隐藏，并补挂待处理的视频宽高比
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification,

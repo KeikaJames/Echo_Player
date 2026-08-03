@@ -46,7 +46,7 @@ Apple Music 的流动歌词很美，但它只属于曲库里的歌。Echo Player
 | FFmpeg（KSPlayer） | ogg · oga · opus · ape · wma / mkv · webm · flv · avi · ts |
 
 > FFmpeg 通路走独立解码内核，播放、走带、倍速、音量、系统"正在播放"齐全；
-> 拍点光晕与歌词识别暂只覆盖原生通路（见「已知限制」）。
+> 歌词识别与拍点预分析会共用一次本机音轨解码，带画面的格式也会提取边缘氛围色。
 
 ## 开箱即用，也真的离线
 
@@ -100,7 +100,6 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 - 纯音乐没有可识别的人声，会如实显示"未识别到语音内容"
 - 极端嘈杂或人声极少的音频可能识别不到（会明确提示，不装死）
-- FFmpeg 通路格式暂无拍点光晕、氛围采样与歌词自动识别
 - 实时字幕跟随系统语言
 - 会议摘要需要系统已开启 Apple Intelligence；不可用时不影响转写、翻译和播放
 
