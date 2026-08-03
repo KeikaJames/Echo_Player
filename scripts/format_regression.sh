@@ -137,7 +137,7 @@ contracts() {
         "发版产物未执行 universal 与签名门禁"
     require_pattern 'format_regression\.sh test' "$ROOT/.github/workflows/release.yml" \
         "发版前未运行 XCTest"
-    require_pattern 'RELEASE_MARKETING_VERSION=.*GITHUB_REF_NAME' "$ROOT/.github/workflows/release.yml" \
+    require_pattern 'RELEASE_MARKETING_VERSION=.*RELEASE_TAG' "$ROOT/.github/workflows/release.yml" \
         "发版 tag 未写入应用版本"
     require_pattern 'actions/checkout@[0-9a-f]{40}' "$ROOT/.github/workflows/release.yml" \
         "发版 checkout 未锁定不可变提交"
