@@ -351,7 +351,7 @@
     <p class="tag reveal" style="--d:.1s">歌词，自己出现。</p>
     <div class="cta reveal" style="--d:.22s">
       <a class="pill" id="download-btn" href="https://github.com/KeikaJames/Echo_Player/releases/latest"><span id="download-label">下载</span></a>
-      <small id="download-meta">macOS 26+ · Apple Silicon · 免费开源</small>
+      <small id="download-meta">macOS 14.1+ · Apple 芯片与 Intel · 免费开源</small>
     </div>
   </header>
 
@@ -421,7 +421,7 @@
   <section id="install">
     <div class="inner-narrow">
       <h2 class="reveal">第一次打开，多点两下。</h2>
-      <p class="h2-sub reveal" style="--d:.08s">需要 macOS 26 或更高。没有 Apple 签名，macOS 会多问一次。</p>
+      <p class="h2-sub reveal" style="--d:.08s">需要 macOS 14.1 或更高。没有 Apple 签名，macOS 会多问一次。</p>
       <div class="steps">
         <div class="step reveal" style="--d:.05s"><span class="n">1</span><span class="t">解压，拖进「应用程序」。</span></div>
         <div class="step reveal" style="--d:.14s"><span class="n">2</span><span class="t"><b>右键 → 打开</b>，再点一次「打开」。</span></div>
@@ -548,7 +548,7 @@
       if (!release.asset || !release.asset.url) return;
       document.getElementById("download-btn").href = release.asset.url;
       document.getElementById("download-meta").textContent =
-        `macOS 26+ · Apple Silicon · ${Math.round(release.asset.size / 1048576)} MB · 免费开源`;
+        `macOS 14.1+ · Apple 芯片与 Intel · ${Math.round(release.asset.size / 1048576)} MB · 免费开源`;
     }
 
     function showNotes(release) {

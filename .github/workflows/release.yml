@@ -132,7 +132,7 @@ jobs:
           compression-level: 0
 
   publish-release:
-    needs: build-release
+    needs: [build-release, verify-sonoma]
     runs-on: macos-26
     permissions:
       actions: read
@@ -235,3 +235,48 @@ jobs:
           gh api --method POST \
             "repos/$GITHUB_REPOSITORY/dispatches" \
             -f event_type=release-site-refresh
+
+  verify-sonoma:
+    needs: build-release
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [arm64, x86_64]
+    runs-on: macos-14
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: 下载待发布安装包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name release-package \
+            --dir "$RUNNER_TEMP/release-package"
+
+      - name: Sonoma 启动检查
+        run: |
+          test "$(sw_vers -productVersion | cut -d. -f1)" = "14"
+          ZIP="$RUNNER_TEMP/release-package/Echo.Player.${RELEASE_TAG}.zip"
+          APP_ROOT="$RUNNER_TEMP/sonoma-smoke"
+          test -f "$ZIP"
+          mkdir -p "$APP_ROOT"
+          ditto -x -k "$ZIP" "$APP_ROOT"
+          APP="$APP_ROOT/Echo Player.app"
+          EXECUTABLE="$APP/Contents/MacOS/LyricPlayer"
+          test -x "$EXECUTABLE"
+          lipo -verify_arch "${{ matrix.architecture }}" "$EXECUTABLE"
+          /usr/bin/arch -"${{ matrix.architecture }}" \
+            "$EXECUTABLE" --sonoma-smoke-test > "$RUNNER_TEMP/sonoma-smoke.log" 2>&1 &
+          APP_PID=$!
+          for attempt in 1 2 3 4 5 6 7 8; do
+            sleep 1
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              cat "$RUNNER_TEMP/sonoma-smoke.log"
+              exit 1
+            fi
+          done
+          kill "$APP_PID"
+          wait "$APP_PID" 2>/dev/null || true

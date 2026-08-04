@@ -2,7 +2,7 @@ import Foundation
 import NaturalLanguage
 import Translation
 
-struct TranslationItem: Sendable {
+struct TranslationItem: Equatable, Sendable {
     let id: UUID
     let text: String
 }
@@ -73,6 +73,7 @@ enum BilingualTranslator {
         return TranslationPlan(groups: groups, skippedIDs: skipped)
     }
 
+    @available(macOS 15.0, *)
     static func translate(_ items: [TranslationItem],
                           using session: TranslationSession,
                           onTranslation: (@MainActor @Sendable (UUID, String?) -> Void)? = nil) async throws -> [UUID: String] {
@@ -102,7 +103,10 @@ enum BilingualTranslator {
                     await onTranslation?(item.id, nil)
                     continue
                 }
-                if TranslationError.alreadyCancelled ~= error { throw CancellationError() }
+                if Task.isCancelled { throw CancellationError() }
+                if #available(macOS 26.0, *), TranslationError.alreadyCancelled ~= error {
+                    throw CancellationError()
+                }
                 throw error
             }
         }
@@ -143,6 +147,7 @@ enum BilingualTranslator {
         }
     }
 
+    @available(macOS 15.0, *)
     private static func shouldTranslate(from source: Locale.Language,
                                         to target: Locale.Language) async throws -> Bool {
         let status = await LanguageAvailability().status(from: source, to: target)
@@ -161,6 +166,7 @@ enum BilingualTranslator {
         language.minimalIdentifier.split(separator: "-").first ?? ""
     }
 
+    @available(macOS 15.0, *)
     private static func isIgnorableLineError(_ error: Error) -> Bool {
         TranslationError.nothingToTranslate ~= error
             || TranslationError.unableToIdentifyLanguage ~= error

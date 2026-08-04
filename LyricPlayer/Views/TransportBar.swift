@@ -8,7 +8,7 @@ struct TransportBar: View {
     @State private var scrubValue: Double = 0
 
     var body: some View {
-        GlassEffectContainer(spacing: 14) {
+        AdaptiveGlassContainer(spacing: 14) {
             HStack(spacing: 14) {
                 transportCluster
                 progressCluster
@@ -77,7 +77,7 @@ struct TransportBar: View {
         }
         .padding(.horizontal, 18)
         .frame(height: 52)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .adaptiveGlassCapsule(interactive: true)
     }
 
     // MARK: - 进度（玻璃胶囊，弹性占宽）
@@ -115,7 +115,7 @@ struct TransportBar: View {
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity)
         .frame(height: 52)
-        .glassEffect(.regular, in: Capsule())
+        .adaptiveGlassCapsule()
     }
 
     private var sliderMax: Double { max(model.duration, 0.01) }
@@ -187,7 +187,7 @@ struct TransportBar: View {
         }
         .padding(.horizontal, 18)
         .frame(height: 52)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .adaptiveGlassCapsule(interactive: true)
     }
 
     private var volumeBinding: Binding<Double> {

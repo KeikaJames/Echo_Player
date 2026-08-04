@@ -15,7 +15,6 @@ struct LyricPlayerApp: App {
                 .frame(minWidth: 980, minHeight: 620)
         }
         .defaultSize(width: 1240, height: 780)
-        .restorationBehavior(.disabled)   // 不恢复历史窗口，避免堆叠
         .commands {
             PlayerCommands()
         }
@@ -28,9 +27,6 @@ struct LyricPlayerApp: App {
         }
         .defaultSize(width: 760, height: 380)
         .windowStyle(.hiddenTitleBar)   // 玻璃直通到顶（比手动改 styleMask 可靠，SwiftUI 不会回改）
-        .windowLevel(.floating)
-        .restorationBehavior(.disabled)       // 上次开着实时字幕退出，也不在下次启动时自动恢复
-        .defaultLaunchBehavior(.suppressed)   // 启动时绝不自动呈现
     }
 }
 
@@ -51,6 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !isRestoringPreviousVersion else { return }
+        // 窗口可能晚于 didFinish 创建，再补收一次。
+        hideLiveCaptionsWindow()
+        DispatchQueue.main.async { [weak self] in self?.hideLiveCaptionsWindow() }
         PlayerModel.shared.restoreState()
         UpdateChecker.autoCheck()
         GlowHaloController.shared.enabled = PlayerModel.shared.glowEnabled
@@ -64,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   !(window is NSPanel),          // 打开/保存面板、NSAlert 都是 NSPanel——
                                                  // 挂上光晕/透明标题栏会把对话框弄乱
                   window.title != "实时字幕" else { return }
+            window.isRestorable = false
             GlowHaloController.shared.attach(to: window)
             WindowChromeController.shared.attach(to: window)
             PlayerModel.shared.flushPendingAspectIfNeeded()
@@ -83,6 +83,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 andEventID: AEEventID(kAEOpenDocuments)
             )
         }
+    }
+
+    private func hideLiveCaptionsWindow() {
+        NSApp.windows.filter { $0.title == "实时字幕" }.forEach { $0.orderOut(nil) }
     }
 
     // MARK: - 打开文件
@@ -171,7 +175,10 @@ struct PlayerCommands: Commands {
             Button(model.showLyrics ? "隐藏歌词" : "显示歌词") { model.showLyrics.toggle() }
                 .keyboardShortcut("l", modifiers: .command)
 
-            Button("实时字幕（麦克风）…") { openWindow(id: "live-captions") }
+            Button("实时字幕（麦克风）…") {
+                LiveCaptionSession.shared.start()
+                openWindow(id: "live-captions")
+            }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
 
             Divider()
