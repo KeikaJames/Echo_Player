@@ -20,6 +20,7 @@ enum BilingualTranslationState: Equatable {
 @Observable
 final class TranslationSettings {
     static let shared = TranslationSettings()
+    static let minimumSystemMessage = "双语翻译需要 macOS 15 或更高版本。"
 
     var lyricsEnabled: Bool {
         didSet { UserDefaults.standard.set(lyricsEnabled, forKey: "lyricsTranslationEnabled") }
@@ -52,9 +53,15 @@ final class TranslationSettings {
             ?? Self.option(for: targetLanguage).name
     }
 
+    var systemTranslationAvailable: Bool {
+        if #available(macOS 15.0, *) { return true }
+        return false
+    }
+
     func loadSupportedLanguages() async {
         guard !didLoadLanguages else { return }
         didLoadLanguages = true
+        guard #available(macOS 15.0, *) else { return }
 
         let languages = await LanguageAvailability().supportedLanguages
         guard !languages.isEmpty else { return }

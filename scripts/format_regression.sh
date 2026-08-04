@@ -8,6 +8,7 @@ PROJECT="$ROOT/LyricPlayer.xcodeproj"
 SCHEME="LyricPlayer"
 DERIVED="${ECHO_DERIVED_DATA:-/tmp/echo-player-format-regression}"
 PACKAGES="$ROOT/build/SourcePackages"
+MINIMUM_MACOS_VERSION="14.1"
 if [ -n "${XCODEBUILD:-}" ]; then
     XCODEBUILD="$XCODEBUILD"
 elif SELECTED_DEVELOPER_DIR="$(xcode-select -p 2>/dev/null)" &&
@@ -53,8 +54,21 @@ contracts() {
     local ffmpeg="$ROOT/LyricPlayer/Models/FFmpegBackend.swift"
     local whisper="$ROOT/LyricPlayer/Transcription/WhisperTranscriber.swift"
     local identity="$ROOT/LyricPlayer/Models/MediaFileIdentity.swift"
+    local project="$ROOT/LyricPlayer.xcodeproj/project.pbxproj"
+    local compatibility="$ROOT/LyricPlayer/Views/SystemCompatibility.swift"
+    local translation="$ROOT/LyricPlayer/Transcription/SystemTranslationTask.swift"
+    local captions="$ROOT/LyricPlayer/Transcription/LiveCaptionEngine.swift"
+    local summary="$ROOT/LyricPlayer/Transcription/MeetingSummarizer.swift"
 
     [ -f "$source" ] || fail "缺少 AnalysisAudioSource.swift"
+    require_pattern 'MACOSX_DEPLOYMENT_TARGET = 14\.1;' "$project" "最低系统版本未设为 macOS 14.1"
+    reject_pattern 'MACOSX_DEPLOYMENT_TARGET = (1[5-9]|2[0-9])' "$project" \
+        "工程中仍有高于 Sonoma 14.1 的部署目标"
+    require_pattern 'AdaptiveGlassContainer' "$compatibility" "Liquid Glass 缺少旧系统回退"
+    require_pattern '#available\(macOS 15\.0' "$translation" "系统翻译未与 Sonoma 隔离"
+    require_pattern 'summarizeLocally' "$summary" "旧系统缺少本地会议摘要"
+    [ "$(rg -c 'startDiarizationLoop\(gen: gen\)' "$captions")" -ge 2 ] || \
+        fail "旧语音引擎未接入说话人分离"
     require_pattern 'AnalysisAudioSource\.Prepared' "$player" "PlayerModel 未持有分析音频生命周期"
     require_pattern 'AnalysisAudioSource\.prepare' "$player" "PlayerModel 未建立原生/FFmpeg 共享准备通路"
     require_pattern 'startLyricsPipeline' "$player" "曲目加载未接入歌词管线"
@@ -121,6 +135,17 @@ contracts() {
     require_pattern 'SHA-?256|sha256' "$update" "自动更新指纹链路丢失"
     require_pattern 'isExpectedVersion' "$ROOT/LyricPlayer/Models/UpdateInstaller.swift" \
         "更新包未校验发布版本"
+    require_pattern 'isCompatibleMinimumSystemVersion' "$ROOT/LyricPlayer/Models/UpdateInstaller.swift" \
+        "更新包未校验最低系统版本"
+    require_pattern 'LSMinimumSystemVersion' "$ROOT/LyricPlayer/Models/UpdateInstaller.swift" \
+        "更新包未读取最低系统版本"
+    require_pattern 'minimumSystemVersions\(inMachO' "$ROOT/LyricPlayer/Models/UpdateInstaller.swift" \
+        "更新包未校验 Mach-O 最低系统版本"
+    require_pattern 'LSMinimumSystemVersionByArchitecture' \
+        "$ROOT/LyricPlayer/Models/UpdateInstaller.swift" \
+        "更新包未校验分架构最低系统版本"
+    require_pattern 'NSWindow\.willCloseNotification' "$ROOT/LyricPlayer/Views/LiveCaptionsView.swift" \
+        "关闭实时字幕窗口后可能继续占用麦克风"
     require_pattern 'executableSupportsCurrentArchitecture' "$ROOT/LyricPlayer/Models/UpdateInstaller.swift" \
         "更新包未校验当前架构"
     require_pattern 'codesign.*--verify|--verify.*--deep.*--strict' "$ROOT/LyricPlayer/Models/UpdateInstaller.swift" \
@@ -137,6 +162,12 @@ contracts() {
         "发版产物未执行 universal 与签名门禁"
     require_pattern 'format_regression\.sh test' "$ROOT/.github/workflows/release.yml" \
         "发版前未运行 XCTest"
+    require_pattern '^    runs-on: macos-14$' "$ROOT/.github/workflows/release.yml" \
+        "发版前未在 Sonoma runner 启动产物"
+    require_pattern '/usr/bin/arch.*matrix\.architecture' "$ROOT/.github/workflows/release.yml" \
+        "Sonoma runner 未分别启动 universal 两个架构"
+    reject_pattern 'macos-14-arm64' "$ROOT/.github/workflows/release.yml" \
+        "GitHub Actions 不支持 macos-14-arm64 YAML 标签"
     require_pattern 'RELEASE_MARKETING_VERSION=.*RELEASE_TAG' "$ROOT/.github/workflows/release.yml" \
         "发版 tag 未写入应用版本"
     require_pattern 'actions/checkout@[0-9a-f]{40}' "$ROOT/.github/workflows/release.yml" \
@@ -250,6 +281,32 @@ assert_universal() {
     [[ " $architectures " == *" x86_64 "* ]] || fail "$binary 缺少 x86_64"
 }
 
+binary_minimum_versions() {
+    /usr/bin/otool -l "$1" | /usr/bin/awk '$1 == "minos" { print $2 }' | /usr/bin/sort -u
+}
+
+version_at_most() {
+    /usr/bin/awk -v actual="$1" -v maximum="$2" 'BEGIN {
+        split(actual, a, "."); split(maximum, m, ".")
+        for (i = 1; i <= 3; i++) {
+            if (a[i] + 0 < m[i] + 0) exit 0
+            if (a[i] + 0 > m[i] + 0) exit 1
+        }
+        exit 0
+    }'
+}
+
+assert_macos_compatible() {
+    local binary="$1"
+    local versions version
+    versions="$(binary_minimum_versions "$binary")"
+    [ -n "$versions" ] || fail "$binary 缺少 macOS 最低版本"
+    while IFS= read -r version; do
+        version_at_most "$version" "$MINIMUM_MACOS_VERSION" || \
+            fail "$binary 最低要求 macOS $version，高于 $MINIMUM_MACOS_VERSION"
+    done <<< "$versions"
+}
+
 universal_build() {
     contracts
     xcodebuild_common
@@ -274,6 +331,14 @@ universal_build() {
     local info="$app/Contents/Info.plist"
     [ -d "$app" ] || fail "未生成 Release app"
     assert_universal "$executable"
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$info")" \
+        = "$MINIMUM_MACOS_VERSION" ] || fail "Release app 最低系统版本不是 macOS $MINIMUM_MACOS_VERSION"
+    [ "$(binary_minimum_versions "$executable")" = "$MINIMUM_MACOS_VERSION" ] || \
+        fail "Release 主程序的 Mach-O 最低系统版本不是 macOS $MINIMUM_MACOS_VERSION"
+    /usr/bin/xcrun dyld_info -dependents "$executable" | \
+        rg -q 'weak-link.*Translation\.framework' || fail "Translation.framework 未弱链接"
+    /usr/bin/xcrun dyld_info -dependents "$executable" | \
+        rg -q 'weak-link.*FoundationModels\.framework' || fail "FoundationModels.framework 未弱链接"
 
     local framework_count deep_framework_count
     framework_count="$(find "$frameworks" -maxdepth 1 -type d -name '*.framework' | wc -l | tr -d ' ')"
@@ -282,6 +347,7 @@ universal_build() {
     for framework in "$frameworks"/*.framework; do
         name="$(basename "$framework" .framework)"
         assert_universal "$framework/$name"
+        assert_macos_compatible "$framework/$name"
         /usr/bin/otool -L "$framework/$name" | reject_binary_paths
         /usr/bin/codesign --verify --strict "$framework" || fail "$name.framework 签名无效"
     done

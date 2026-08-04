@@ -74,10 +74,18 @@ enum MeetingSummarizer {
 
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
-            return try await summarizeWithSystemModel(entries: entries, onProgress: onProgress)
+            do {
+                return try await summarizeWithSystemModel(entries: entries, onProgress: onProgress)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                NSLog("系统会议摘要不可用，改用本地摘要：\(error.localizedDescription)")
+            }
         }
         #endif
-        throw MeetingSummaryError.unavailable
+        onProgress("正在生成本地摘要…")
+        try Task.checkCancellation()
+        return try summarizeLocally(entries: entries)
     }
 
     private static func transcriptLines(from entries: [CaptionEntry]) -> [String] {
@@ -121,6 +129,410 @@ enum MeetingSummarizer {
         }
         flush()
         return result
+    }
+
+    /// 旧系统与 Apple Intelligence 不可用时的确定性回退，只抽取原文，不补写事实。
+    static func summarizeLocally(entries: [CaptionEntry]) throws -> MeetingSummary {
+        let cleaned = entries.compactMap { entry -> (CaptionEntry, String)? in
+            let text = compact(entry.text)
+            return text.isEmpty ? nil : (entry, text)
+        }
+        guard !cleaned.isEmpty else { throw MeetingSummaryError.noTranscript }
+        try Task.checkCancellation()
+
+        let decisions = matching(cleaned.map(\.1), keywords: [
+            "决定", "确认", "确定", "同意", "结论", "通过",
+            "decided", "agreed", "confirmed", "approved",
+        ], limit: 6, rejectPending: true, rejectCompleted: false)
+        let actionItems = matching(cleaned.map(\.1), keywords: [
+            "待办", "下一步", "负责", "截止", "跟进", "需要完成",
+            "todo", "action item", "follow up", "deadline",
+        ], limit: 8, rejectPending: false, rejectCompleted: true)
+        let keyPoints = highlights(cleaned.map(\.1), limit: 6)
+        let speakers = Set(cleaned.compactMap { $0.0.speaker })
+        var overview = "共记录 \(cleaned.count) 条发言"
+        if !speakers.isEmpty { overview += "，识别到 \(speakers.count) 位说话人" }
+        overview += "。"
+        if let first = keyPoints.first { overview += " 讨论内容包括：\(first)" }
+
+        return MeetingSummary(overview: overview,
+                              keyPoints: keyPoints,
+                              decisions: decisions,
+                              actionItems: actionItems,
+                              chapters: localChapters(cleaned))
+    }
+
+    private static func compact(_ text: String) -> String {
+        text.split(whereSeparator: \Character.isWhitespace).joined(separator: " ")
+    }
+
+    private static func matching(_ texts: [String],
+                                 keywords: [String],
+                                 limit: Int,
+                                 rejectPending: Bool,
+                                 rejectCompleted: Bool) -> [String] {
+        unique(texts.filter { text in
+            let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            return keywords.contains {
+                containsAffirmed($0, in: folded,
+                                  rejectPending: rejectPending,
+                                  rejectCompleted: rejectCompleted)
+            }
+        }, limit: limit)
+    }
+
+    private static func containsAffirmed(_ keyword: String,
+                                         in text: String,
+                                         rejectPending: Bool,
+                                         rejectCompleted: Bool) -> Bool {
+        var start = text.startIndex
+        while start < text.endIndex,
+              let range = text.range(of: keyword, range: start..<text.endIndex) {
+            if hasWordBoundaries(range, keyword: keyword, in: text),
+               !isNegated(range, in: text),
+               !isCancelledBefore(range, in: text),
+               !isCancelledAfter(range, in: text),
+               (!rejectPending || (!isPendingBefore(range, in: text)
+                   && !isPendingAfter(range, in: text))),
+               (!rejectCompleted || (!isCompletedBefore(range, in: text)
+                   && !isCompletedAfter(range, in: text))) { return true }
+            start = range.upperBound
+        }
+        return false
+    }
+
+    private static func hasWordBoundaries(_ range: Range<String.Index>,
+                                          keyword: String,
+                                          in text: String) -> Bool {
+        let isEnglishPhrase = keyword.utf8.allSatisfy {
+            (65...90).contains($0) || (97...122).contains($0) || $0 == 32
+        }
+        guard isEnglishPhrase else { return true }
+        if range.lowerBound > text.startIndex {
+            let previous = text[text.index(before: range.lowerBound)]
+            if previous.isLetter || previous.isNumber { return false }
+        }
+        if range.upperBound < text.endIndex {
+            let next = text[range.upperBound]
+            if next.isLetter || next.isNumber { return false }
+        }
+        return true
+    }
+
+    private static func isNegated(_ range: Range<String.Index>, in text: String) -> Bool {
+        let before = text[..<range.lowerBound]
+        let after = text[range.upperBound...]
+        let separators = "，。！？；,.!?;:\n"
+        let clauseStart = before.lastIndex(where: { separators.contains($0) })
+            .map { text.index(after: $0) } ?? text.startIndex
+        let clauseEnd = after.firstIndex(where: { separators.contains($0) }) ?? text.endIndex
+        let prefix = before[clauseStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = after[..<clauseEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+        let localPrefix = String(prefix.suffix(32))
+        let localSuffix = String(suffix.prefix(32))
+        return isNegatedBefore(localPrefix) || isUnresolvedAfter(localSuffix)
+    }
+
+    private static func isNegatedBefore(_ prefix: String) -> Bool {
+        var compact = String(prefix.filter { !$0.isWhitespace })
+        let contrasts = ["但是", "不过", "然而", "但"]
+        if let range = contrasts.compactMap({ compact.range(of: $0, options: .backwards) })
+            .max(by: { $0.lowerBound < $1.lowerBound }) {
+            compact = String(compact[range.upperBound...])
+        }
+        let modifiers = ["最终", "正式", "明确", "完全", "真正"]
+        while let modifier = modifiers.first(where: compact.hasSuffix) {
+            compact.removeLast(modifier.count)
+        }
+        let chineseNegations = [
+            "没有任何人", "没有人", "无一人", "无人", "没人",
+            "尚未", "暂未", "并未", "没有", "没能", "未能", "尚无",
+            "无法", "不能", "无需", "不用", "不必", "不需要", "不要", "不会",
+            "不", "未", "没",
+        ]
+        if chineseNegations.contains(where: compact.hasSuffix) { return true }
+        let governedChineseNegations = [
+            "尚未", "暂未", "并未", "仍未", "还未", "没有", "没能", "未能", "尚无",
+            "无法", "不能", "无需", "不用", "不必", "不需要", "不要", "不会",
+            "没有任何人", "没有人", "无一人", "无人", "没人",
+        ]
+        if governedChineseNegations.contains(where: compact.contains) { return true }
+
+        let normalized = prefix.lowercased().map { character in
+            character.isLetter || character == "'" ? character : " "
+        }
+        var words = String(normalized).split(separator: " ").map(String.init)
+        let englishContrasts = ["but", "however", "then", "finally"]
+        if let index = words.lastIndex(where: englishContrasts.contains) {
+            words = index < words.endIndex - 1
+                ? Array(words[words.index(after: index)...])
+                : []
+        }
+        while let word = words.last, word == "yet" || word.hasSuffix("ly") {
+            words.removeLast()
+        }
+        let governedEnglishNegations = [
+            "not", "no", "never", "nobody", "none", "neither", "without",
+            "don't", "didn't", "doesn't", "haven't", "hasn't", "hadn't",
+            "won't", "can't", "cannot", "isn't", "aren't", "wasn't", "weren't",
+            "couldn't", "shouldn't", "wouldn't",
+        ]
+        if words.contains(where: governedEnglishNegations.contains) { return true }
+        let english = " " + words.suffix(4).joined(separator: " ") + " "
+        let englishNegations = [
+            " nobody ", " no one ", " none ", " neither ",
+            " not ", " no ", " never ", " don't ", " didn't ", " doesn't ",
+            " haven't ", " hasn't ", " won't ", " can't ", " cannot ",
+            " do not ", " did not ", " does not ", " have not ", " has not ",
+            " will not ", " should not ", " no need to ",
+        ]
+        return englishNegations.contains(where: english.hasSuffix)
+    }
+
+    private static func isPendingBefore(_ range: Range<String.Index>, in text: String) -> Bool {
+        let before = text[..<range.lowerBound]
+        let separators = "，。！？；,.!?;:\n"
+        let clauseStart = before.lastIndex(where: { separators.contains($0) })
+            .map { text.index(after: $0) } ?? text.startIndex
+        let prefix = before[clauseStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        var compact = String(prefix.suffix(32).filter { !$0.isWhitespace })
+        let contrasts = ["但是", "不过", "然而", "但"]
+        if let range = contrasts.compactMap({ compact.range(of: $0, options: .backwards) })
+            .max(by: { $0.lowerBound < $1.lowerBound }) {
+            compact = String(compact[range.upperBound...])
+        }
+        let modifiers = ["最终", "正式", "明确", "完全", "真正"]
+        while let modifier = modifiers.first(where: compact.hasSuffix) {
+            compact.removeLast(modifier.count)
+        }
+        let chinesePending = [
+            "尚待", "有待", "尚需", "仍需", "需要", "需", "待",
+            "将会", "即将", "将", "计划", "准备", "拟", "预计", "希望",
+            "应该", "应", "可能", "或许", "大概",
+        ]
+        if chinesePending.contains(where: compact.hasSuffix) { return true }
+        let governedChinesePending = [
+            "尚待", "有待", "尚需", "仍需", "需要", "将会", "即将",
+            "将于", "将在", "计划", "准备", "预计", "希望", "应该",
+            "可能", "或许", "大概", "明天", "后天", "下周", "下月",
+            "稍后", "之后", "后续", "未来", "届时", "待会", "改天",
+        ]
+        if governedChinesePending.contains(where: compact.contains) { return true }
+
+        let normalized = prefix.lowercased().map { character in
+            character.isLetter || character == "'" ? character : " "
+        }
+        let english = " " + String(normalized).split(separator: " ").suffix(5).joined(separator: " ") + " "
+        let englishPending = [
+            " will be ", " shall be ", " should be ", " must be ",
+            " may be ", " might be ", " could be ", " would be ",
+            " needs to be ", " need to be ", " has to be ", " have to be ",
+            " is to be ", " are to be ", " likely to be ", " expected to be ",
+            " planned to be ", " scheduled to be ", " to be ", " yet to be ",
+        ]
+        return englishPending.contains(where: english.hasSuffix)
+    }
+
+    private static func isCompletedBefore(_ range: Range<String.Index>, in text: String) -> Bool {
+        let before = text[..<range.lowerBound]
+        let sentenceSeparators = "。！？；.!?;\n"
+        let sentenceStart = before.lastIndex(where: { sentenceSeparators.contains($0) })
+            .map { text.index(after: $0) } ?? text.startIndex
+        let sentencePrefix = before[sentenceStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        let clauseSeparators = "，,：:"
+        let clauseStart = sentencePrefix.lastIndex(where: { clauseSeparators.contains($0) })
+            .map { sentencePrefix.index(after: $0) } ?? sentencePrefix.startIndex
+        let clausePrefix = sentencePrefix[clauseStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        if hasCompletedState(String(clausePrefix)) { return true }
+        guard hasCompletedState(String(sentencePrefix)) else { return false }
+
+        let keyword = String(text[range]).lowercased()
+        let explicitHeaders = ["待办", "下一步", "todo", "action item", "follow up", "deadline"]
+        if explicitHeaders.contains(keyword) { return false }
+        let clauseAfter = text[range.upperBound...]
+        let clauseEnd = clauseAfter.firstIndex(where: { "，,。！？；.!?;\n".contains($0) })
+            ?? text.endIndex
+        let clauseSuffix = clauseAfter[..<clauseEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+        return clausePrefix.hasPrefix("由") && clauseSuffix.isEmpty
+    }
+
+    private static func isCompletedAfter(_ range: Range<String.Index>, in text: String) -> Bool {
+        let after = text[range.upperBound...]
+        let separators = "。！？；.!?;\n"
+        let clauseEnd = after.firstIndex(where: { separators.contains($0) }) ?? text.endIndex
+        let suffix = after[..<clauseEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+        return hasCompletedState(String(suffix))
+            || hasRepeatedStateAfter(range, in: text, matches: hasCompletedState)
+    }
+
+    private static func hasCompletedState(_ text: String) -> Bool {
+        let compact = String(text.filter { !$0.isWhitespace })
+        let chineseCompleted = [
+            "已经全部完成", "已全部完成", "已经完成", "已完成",
+            "已经结束", "已结束", "已经办结", "已办结",
+            "已经解决", "已解决", "已经交付", "已交付",
+            "已经关闭", "已关闭",
+        ]
+        if chineseCompleted.contains(where: compact.contains) { return true }
+
+        let normalized = text.lowercased().map { character in
+            character.isLetter || character == "'" ? character : " "
+        }
+        let english = " " + String(normalized).split(separator: " ").joined(separator: " ") + " "
+        let englishCompleted = [
+            " was completed ", " has been completed ", " had been completed ",
+            " is complete ", " was done ", " has been done ", " had been done ",
+            " was finished ", " has been finished ", " had been finished ",
+            " was closed ", " has been closed ", " was resolved ", " has been resolved ",
+        ]
+        return englishCompleted.contains(where: english.contains)
+    }
+
+    private static func isCancelledBefore(_ range: Range<String.Index>, in text: String) -> Bool {
+        let before = text[..<range.lowerBound]
+        let separators = "，。！？；,.!?;:\n"
+        let clauseStart = before.lastIndex(where: { separators.contains($0) })
+            .map { text.index(after: $0) } ?? text.startIndex
+        return hasCancelledState(String(before[clauseStart...]))
+    }
+
+    private static func isCancelledAfter(_ range: Range<String.Index>, in text: String) -> Bool {
+        let after = text[range.upperBound...]
+        let separators = "，。！？；,.!?;:\n"
+        let clauseEnd = after.firstIndex(where: { separators.contains($0) }) ?? text.endIndex
+        return hasCancelledState(String(after[..<clauseEnd]))
+            || hasRepeatedStateAfter(range, in: text, matches: hasCancelledState)
+    }
+
+    private static func hasRepeatedStateAfter(_ range: Range<String.Index>,
+                                              in text: String,
+                                              matches: (String) -> Bool) -> Bool {
+        let after = text[range.upperBound...]
+        let separators = "。！？.!?\n"
+        let sentenceEnd = after.firstIndex(where: { separators.contains($0) }) ?? text.endIndex
+        let suffix = after[..<sentenceEnd]
+        let keyword = String(text[range])
+        guard let repeated = suffix.range(of: keyword, options: [.caseInsensitive, .diacriticInsensitive]) else { return false }
+        return matches(String(suffix[repeated.lowerBound...]))
+    }
+
+    private static func hasCancelledState(_ text: String) -> Bool {
+        let compact = String(text.filter { !$0.isWhitespace })
+        let chineseCancelled = [
+            "已经撤销", "已撤销", "已经取消", "已取消", "已经作废", "已作废",
+            "不再执行", "不再推进", "停止执行", "停止推进",
+        ]
+        if chineseCancelled.contains(where: compact.contains) { return true }
+
+        let normalized = text.lowercased().map { character in
+            character.isLetter ? character : " "
+        }
+        let english = " " + String(normalized).split(separator: " ").joined(separator: " ") + " "
+        let englishCancelled = [
+            " was cancelled ", " has been cancelled ", " was canceled ", " has been canceled ",
+            " was revoked ", " has been revoked ", " was withdrawn ", " has been withdrawn ",
+            " was dropped ", " has been dropped ", " no longer active ",
+        ]
+        return englishCancelled.contains(where: english.contains)
+    }
+
+    private static func isUnresolvedAfter(_ suffix: String) -> Bool {
+        unresolvedState(in: suffix, markers: [
+            "尚未", "暂未", "并未", "没有", "没能", "未能", "仍未", "还未", "未",
+        ])
+    }
+
+    private static func isPendingAfter(_ range: Range<String.Index>, in text: String) -> Bool {
+        let after = text[range.upperBound...]
+        let separators = "，。！？；,.!?;:\n"
+        let clauseEnd = after.firstIndex(where: { separators.contains($0) }) ?? text.endIndex
+        let suffix = after[..<clauseEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+        let localSuffix = String(suffix.prefix(32))
+        if unresolvedState(in: localSuffix, markers: [
+            "尚待", "有待", "尚需", "仍需", "需要", "需", "待",
+            "可能", "或许", "大概",
+        ]) { return true }
+
+        let compact = String(localSuffix.filter { !$0.isWhitespace })
+        let futureMarkers = ["将在", "将于", "将会在", "将会于"]
+        let deferredStates = ["作出", "做出", "形成"]
+        return futureMarkers.contains(where: compact.hasPrefix)
+            && deferredStates.contains(where: compact.contains)
+    }
+
+    private static func unresolvedState(in suffix: String, markers: [String]) -> Bool {
+        var compact = String(suffix.filter { !$0.isWhitespace })
+        let leadIns = ["目前", "至今", "现在", "仍然", "依然", "还是"]
+        while let leadIn = leadIns.first(where: compact.hasPrefix) {
+            compact.removeFirst(leadIn.count)
+        }
+
+        let modifiers = ["最终", "正式", "明确", "完全"]
+        let states = ["作出", "做出", "形成", "决定", "确定", "明确", "确认", "敲定", "通过", "安排"]
+        for marker in markers where compact.hasPrefix(marker) {
+            var remainder = String(compact.dropFirst(marker.count))
+            if let modifier = modifiers.first(where: remainder.hasPrefix) {
+                remainder.removeFirst(modifier.count)
+            }
+            return states.contains(where: remainder.hasPrefix)
+        }
+        return false
+    }
+
+    private static func highlights(_ texts: [String], limit: Int) -> [String] {
+        let ranked = texts.enumerated().sorted { lhs, rhs in
+            let left = informationScore(lhs.element)
+            let right = informationScore(rhs.element)
+            return left == right ? lhs.offset < rhs.offset : left > right
+        }
+        let selected = unique(ranked.map(\.element), limit: limit)
+        return selected.sorted { firstIndex(of: $0, in: texts) < firstIndex(of: $1, in: texts) }
+    }
+
+    private static func informationScore(_ text: String) -> Int {
+        let punctuation = text.filter { "，。！？,.!?；;：:".contains($0) }.count
+        return min(text.count, 120) + min(punctuation, 6) * 8
+    }
+
+    private static func unique(_ texts: [String], limit: Int) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for text in texts {
+            let key = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            guard seen.insert(key).inserted else { continue }
+            result.append(text)
+            if result.count == limit { break }
+        }
+        return result
+    }
+
+    private static func firstIndex(of text: String, in texts: [String]) -> Int {
+        texts.firstIndex(of: text) ?? .max
+    }
+
+    private static func localChapters(_ entries: [(CaptionEntry, String)]) -> [MeetingChapter] {
+        guard let startedAt = entries.first?.0.date else { return [] }
+        let groupSize = max(1, Int(ceil(Double(entries.count) / 8.0)))
+        return stride(from: 0, to: entries.count, by: groupSize).map { start in
+            let end = min(start + groupSize, entries.count)
+            let group = entries[start..<end]
+            let first = group[group.startIndex]
+            let title = first.1.count > 24 ? String(first.1.prefix(24)) + "…" : first.1
+            let detail = group.prefix(2).map(\.1).joined(separator: " ")
+            return MeetingChapter(startTime: relativeTime(first.0.date, from: startedAt),
+                                  title: title,
+                                  detail: detail)
+        }
+    }
+
+    private static func relativeTime(_ date: Date, from startedAt: Date) -> String {
+        let elapsed = max(0, Int(date.timeIntervalSince(startedAt)))
+        let hours = elapsed / 3600
+        let minutes = (elapsed % 3600) / 60
+        let seconds = elapsed % 60
+        return hours > 0
+            ? String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "%02d:%02d", minutes, seconds)
     }
 }
 

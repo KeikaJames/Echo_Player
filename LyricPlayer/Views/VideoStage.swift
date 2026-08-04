@@ -82,10 +82,16 @@ struct VideoStage: View {
         @Bindable var settings = translationSettings
         return Menu {
             Toggle("显示双语字幕", isOn: $settings.lyricsEnabled)
+                .disabled(!settings.systemTranslationAvailable && !settings.lyricsEnabled)
             Picker("译为", selection: $settings.targetIdentifier) {
                 ForEach(settings.supportedLanguages) { language in
                     Text(language.name).tag(language.id)
                 }
+            }
+            .disabled(!settings.systemTranslationAvailable)
+            if !settings.systemTranslationAvailable {
+                Divider()
+                Text(TranslationSettings.minimumSystemMessage)
             }
             if case .failed(let message) = model.lyricsTranslationState {
                 Divider()
@@ -99,9 +105,13 @@ struct VideoStage: View {
                 Image(systemName: settings.lyricsEnabled ? "captions.bubble.fill" : "captions.bubble")
             }
         }
-        .buttonStyle(.glass)
+        .adaptiveGlassButtonStyle()
         .controlSize(.small)
-        .help(settings.lyricsEnabled ? "关闭双语字幕" : "使用系统翻译显示双语字幕")
+        .help(settings.lyricsEnabled
+            ? "关闭双语字幕"
+            : (settings.systemTranslationAvailable
+                ? "使用系统翻译显示双语字幕"
+                : TranslationSettings.minimumSystemMessage))
         .padding(.top, 34)
         .padding(.trailing, 14)
     }

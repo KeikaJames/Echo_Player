@@ -1,8 +1,4 @@
 import SwiftUI
-import Translation
-#if canImport(FoundationModels)
-import FoundationModels
-#endif
 
 struct ContentView: View {
     @Environment(PlayerModel.self) private var model
@@ -10,7 +6,7 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var isDropTargeted = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
-    @State private var translationConfiguration: TranslationSession.Configuration?
+    @State private var translationRequest: SystemTranslationRequest?
     @State private var lyricsTranslationGroups: [TranslationGroup] = []
     @State private var lyricsTranslationWarning: String?
 
@@ -23,7 +19,7 @@ struct ContentView: View {
             detailPane
         }
         .toolbar { toolbarContent }
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .hidingWindowToolbarBackground()
         .environment(\.colorScheme, isVideoMode ? .dark : .light)   // 视频=沉浸深色，音频=浅色
         .onChange(of: isVideoMode) { _, video in
             withAnimation { columnVisibility = video ? .detailOnly : .automatic }   // 视频自动收起侧栏
@@ -41,15 +37,15 @@ struct ContentView: View {
             model.open(urls: audio)
             return true
         } isTargeted: { isDropTargeted = $0 }
-        .translationTask(translationConfiguration) { session in
-            await translateLyrics(using: session)
-        }
+        .systemTranslationTask(translationRequest,
+                               onTranslation: applyLyricsTranslation,
+                               onFinish: finishLyricsTranslation)
         .onChange(of: model.lyricsRevision) { _, _ in requestTranslation() }
         .onChange(of: translationSettings.lyricsEnabled) { _, enabled in
             if enabled {
                 requestTranslation()
             } else {
-                translationConfiguration = nil
+                translationRequest = nil
                 lyricsTranslationGroups = []
                 lyricsTranslationWarning = nil
                 model.lyricsTranslationState = .idle
@@ -117,7 +113,7 @@ struct ContentView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Button("打开文件…") { model.presentOpenPanel() }
-                .buttonStyle(.glass)
+                .adaptiveGlassButtonStyle()
                 .controlSize(.large)
                 .keyboardShortcut("o", modifiers: .command)
                 .padding(.top, 8)
@@ -154,6 +150,7 @@ struct ContentView: View {
 
         ToolbarItem(placement: .primaryAction) {
             Button {
+                LiveCaptionSession.shared.start()
                 openWindow(id: "live-captions")
             } label: {
                 Label("实时字幕", systemImage: "waveform.badge.mic")
@@ -187,9 +184,17 @@ struct ContentView: View {
         guard translationSettings.lyricsEnabled,
               !model.lyricLines.isEmpty,
               case .done = model.lyricsStatus else {
-            translationConfiguration = nil
+            translationRequest = nil
             lyricsTranslationGroups = []
             lyricsTranslationWarning = nil
+            return
+        }
+
+        guard translationSettings.systemTranslationAvailable else {
+            translationRequest = nil
+            lyricsTranslationGroups = []
+            lyricsTranslationWarning = TranslationSettings.minimumSystemMessage
+            model.lyricsTranslationState = .failed(TranslationSettings.minimumSystemMessage)
             return
         }
 
@@ -202,7 +207,7 @@ struct ContentView: View {
         model.lyricsTranslationTarget = translationSettings.targetIdentifier
 
         guard let first = lyricsTranslationGroups.first else {
-            translationConfiguration = nil
+            translationRequest = nil
             model.lyricsTranslationState = .done
             return
         }
@@ -210,82 +215,56 @@ struct ContentView: View {
         configureLyricsTranslation(for: first)
     }
 
-    private func translateLyrics(using session: TranslationSession) async {
-        guard let group = lyricsTranslationGroups.first else { return }
-        let target = translationSettings.targetIdentifier
-        let trackID = model.currentTrackID
-        let revision = model.lyricsRevision
-        let groupID = group.id
+    private func applyLyricsTranslation(requestID: UUID, lineID: UUID, text: String?) {
+        guard translationRequest?.id == requestID,
+              lyricsTranslationGroups.first?.id == requestID,
+              translationSettings.lyricsEnabled else { return }
+        model.translatedLyrics[lineID] = text
+    }
 
-        model.lyricsTranslationState = .translating
-        do {
-            let translated = try await BilingualTranslator.translate(group.items, using: session) { id, text in
-                guard model.currentTrackID == trackID,
-                      model.lyricsRevision == revision,
-                      lyricsTranslationGroups.first?.id == groupID,
-                      translationSettings.lyricsEnabled,
-                      translationSettings.targetIdentifier == target else { return }
-                model.translatedLyrics[id] = text
-            }
-            try Task.checkCancellation()
-            guard model.currentTrackID == trackID,
-                  model.lyricsRevision == revision,
-                  lyricsTranslationGroups.first?.id == groupID,
-                  translationSettings.lyricsEnabled,
-                  translationSettings.targetIdentifier == target else { return }
+    private func finishLyricsTranslation(requestID: UUID, outcome: SystemTranslationOutcome) {
+        guard let group = lyricsTranslationGroups.first,
+              group.id == requestID,
+              let request = translationRequest,
+              request.id == requestID,
+              translationSettings.targetIdentifier == request.targetIdentifier else { return }
+
+        switch outcome {
+        case .completed(let translated):
             model.translatedLyrics.merge(translated) { _, new in new }
-            model.lyricsTranslationTarget = target
+            model.lyricsTranslationTarget = request.targetIdentifier
             lyricsTranslationGroups.removeFirst()
             if let next = lyricsTranslationGroups.first {
                 configureLyricsTranslation(for: next)
             } else {
-                translationConfiguration = nil
+                translationRequest = nil
                 model.lyricsTranslationState = lyricsTranslationWarning.map(BilingualTranslationState.failed) ?? .done
             }
-        } catch is CancellationError {
-            // 配置变化会取消旧任务，新任务会立即接手
-        } catch let error as BilingualTranslationError {
-            guard model.currentTrackID == trackID,
-                  model.lyricsRevision == revision,
-                  lyricsTranslationGroups.first?.id == groupID,
-                  translationSettings.targetIdentifier == target else { return }
+
+        case .unsupported(let message):
             for item in group.items { model.translatedLyrics[item.id] = nil }
-            lyricsTranslationWarning = error.localizedDescription
+            lyricsTranslationWarning = message
             lyricsTranslationGroups.removeFirst()
             if let next = lyricsTranslationGroups.first {
                 configureLyricsTranslation(for: next)
             } else {
-                translationConfiguration = nil
-                model.lyricsTranslationState = .failed(error.localizedDescription)
+                translationRequest = nil
+                model.lyricsTranslationState = .failed(message)
             }
-        } catch {
-            guard model.currentTrackID == trackID,
-                  model.lyricsRevision == revision,
-                  lyricsTranslationGroups.first?.id == groupID,
-                  translationSettings.targetIdentifier == target else { return }
-            model.lyricsTranslationState = .failed(error.localizedDescription)
+
+        case .failed(let message):
+            translationRequest = nil
+            model.lyricsTranslationState = .failed(message)
         }
     }
 
     private func configureLyricsTranslation(for group: TranslationGroup) {
-        let source = group.sourceLanguage
-        let target = translationSettings.targetLanguage
-        let configuration: TranslationSession.Configuration
-        #if canImport(FoundationModels)
-        if #available(macOS 26.4, *), SystemLanguageModel.default.isAvailable {
-            configuration = TranslationSession.Configuration(source: source, target: target,
-                                                               preferredStrategy: .highFidelity)
-        } else {
-            configuration = TranslationSession.Configuration(source: source, target: target)
-        }
-        #else
-        configuration = TranslationSession.Configuration(source: source, target: target)
-        #endif
-
-        if translationConfiguration?.source != source || translationConfiguration?.target != target {
-            translationConfiguration = configuration
-        } else {
-            translationConfiguration?.invalidate()
-        }
+        translationRequest = SystemTranslationRequest(
+            id: group.id,
+            sourceIdentifier: group.sourceIdentifier,
+            targetIdentifier: translationSettings.targetIdentifier,
+            items: group.items,
+            strategy: .highFidelity
+        )
     }
 }

@@ -168,14 +168,14 @@ struct MeetingSummaryView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             Button("重新生成") { session.generateSummary() }
-                .buttonStyle(.glass)
+                .adaptiveGlassButtonStyle()
                 .disabled(session.entries.isEmpty || isGenerating)
             Button("拷贝摘要") { session.copySummary() }
-                .buttonStyle(.glass)
+                .adaptiveGlassButtonStyle()
                 .disabled(session.meetingSummary == nil)
             Spacer()
             Button("完成") { dismiss() }
-                .buttonStyle(.glassProminent)
+                .adaptiveGlassButtonStyle(prominent: true)
                 .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 16)

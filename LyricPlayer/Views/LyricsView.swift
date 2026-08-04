@@ -30,10 +30,16 @@ struct LyricsView: View {
             }
             Menu {
                 Toggle("显示双语歌词", isOn: $settings.lyricsEnabled)
+                    .disabled(!settings.systemTranslationAvailable && !settings.lyricsEnabled)
                 Picker("译为", selection: $settings.targetIdentifier) {
                     ForEach(settings.supportedLanguages) { language in
                         Text(language.name).tag(language.id)
                     }
+                }
+                .disabled(!settings.systemTranslationAvailable)
+                if !settings.systemTranslationAvailable {
+                    Divider()
+                    Text(TranslationSettings.minimumSystemMessage)
                 }
                 if case .failed(let message) = model.lyricsTranslationState {
                     Divider()
@@ -43,7 +49,7 @@ struct LyricsView: View {
                 Label(settings.lyricsEnabled ? "双语 · \(settings.targetName)" : "双语歌词",
                       systemImage: "character.bubble")
             }
-            .buttonStyle(.glass)
+            .adaptiveGlassButtonStyle()
             .controlSize(.small)
             .help(translationHelp)
         }
@@ -51,6 +57,11 @@ struct LyricsView: View {
     }
 
     private var translationHelp: String {
+        guard translationSettings.systemTranslationAvailable else {
+            return translationSettings.lyricsEnabled
+                ? "关闭双语歌词"
+                : TranslationSettings.minimumSystemMessage
+        }
         if case .failed(let message) = model.lyricsTranslationState { return message }
         return translationSettings.lyricsEnabled ? "关闭双语歌词" : "使用系统翻译显示双语歌词"
     }
@@ -74,16 +85,8 @@ struct LyricsView: View {
                 .padding(.horizontal, 34)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onScrollPhaseChange { _, newPhase in
-                switch newPhase {
-                case .interacting, .tracking, .decelerating:
-                    suspendAutoScroll()
-                case .idle:
-                    scheduleAutoScrollResume()
-                default:
-                    break
-                }
-            }
+            .trackingScrollPhase(onInteracting: suspendAutoScroll,
+                                 onIdle: scheduleAutoScrollResume)
             .onChange(of: model.currentLineIndex) { _, newIndex in
                 scrollToCurrent(newIndex, proxy: proxy, animated: true)
             }

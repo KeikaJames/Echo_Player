@@ -4,14 +4,16 @@
 
 # Echo Player
 
-![macOS](https://img.shields.io/badge/macOS-26.0%2B-blue)
-![芯片](https://img.shields.io/badge/Apple%20Silicon-原生优化-8A56F5)
+![macOS](https://img.shields.io/badge/macOS-14.1%2B-blue)
+![芯片](https://img.shields.io/badge/Apple%20Silicon%20%2B%20Intel-Universal-8A56F5)
 ![技术](https://img.shields.io/badge/SwiftUI-Liquid%20Glass-orange)
 ![许可](https://img.shields.io/badge/License-MIT-green)
 
 **[官网 · 下载 · 安装教程](https://keikajames.github.io/Echo_Player/)**
 
 </div>
+
+> 系统要求：macOS 14.1 或更高版本。双语翻译需要 macOS 15；Apple Intelligence 增强功能需要 macOS 26。
 
 ---
 
@@ -96,7 +98,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 - 纯音乐没有可识别的人声，会如实显示"未识别到语音内容"
 - 极端嘈杂或人声极少的音频可能识别不到（会明确提示，不装死）
 - 实时字幕跟随系统语言
-- 会议摘要需要系统已开启 Apple Intelligence；不可用时不影响转写、翻译和播放
+- 基础会议摘要可直接使用；AI 增强摘要需要 macOS 26 并开启 Apple Intelligence
 
 ## 致谢
 

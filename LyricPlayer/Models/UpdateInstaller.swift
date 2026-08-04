@@ -94,6 +94,293 @@ final class UpdateInstaller: NSObject {
         }
     }
 
+    nonisolated static func isCompatibleMinimumSystemVersion(
+        _ value: String?,
+        current: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion
+    ) -> Bool {
+        guard let value, let required = systemVersion(from: value) else { return false }
+        return (required.majorVersion, required.minorVersion, required.patchVersion)
+            <= (current.majorVersion, current.minorVersion, current.patchVersion)
+    }
+
+    nonisolated private static func systemVersion(from value: String) -> OperatingSystemVersion? {
+        let components = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...3).contains(components.count) else { return nil }
+        let numbers = components.compactMap { component -> Int? in
+            guard !component.isEmpty,
+                  component.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
+            return Int(component)
+        }
+        guard numbers.count == components.count else { return nil }
+        return OperatingSystemVersion(
+            majorVersion: numbers[0],
+            minorVersion: numbers.count > 1 ? numbers[1] : 0,
+            patchVersion: numbers.count > 2 ? numbers[2] : 0
+        )
+    }
+
+    nonisolated static func areCompatibleArchitectureMinimumSystemVersions(
+        _ value: Any?,
+        current: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion
+    ) -> Bool {
+        guard let value else { return true }
+        guard let versions = value as? [String: Any], !versions.isEmpty else { return false }
+        return versions.allSatisfy { architecture, version in
+            !architecture.isEmpty
+                && isCompatibleMinimumSystemVersion(version as? String, current: current)
+        }
+    }
+
+    nonisolated static func minimumSystemVersions(inMachO data: Data) -> [OperatingSystemVersion]? {
+        guard data.count >= 4 else { return nil }
+        let magic = uint32(in: data, at: 0, order: .big)
+        switch magic {
+        case 0xCAFE_BABE:
+            return minimumSystemVersions(inFatMachO: data, order: .big, is64Bit: false)
+        case 0xBEBA_FECA:
+            return minimumSystemVersions(inFatMachO: data, order: .little, is64Bit: false)
+        case 0xCAFE_BABF:
+            return minimumSystemVersions(inFatMachO: data, order: .big, is64Bit: true)
+        case 0xBFBA_FECA:
+            return minimumSystemVersions(inFatMachO: data, order: .little, is64Bit: true)
+        default:
+            return minimumSystemVersions(inThinMachO: data, offset: 0, size: data.count)
+                ?? minimumSystemVersions(inArchive: data, offset: 0, size: data.count)
+        }
+    }
+
+    nonisolated private static func minimumSystemVersions(
+        inFatMachO data: Data,
+        order: ByteOrder,
+        is64Bit: Bool
+    ) -> [OperatingSystemVersion] {
+        guard let countValue = uint32(in: data, at: 4, order: order),
+              countValue > 0, countValue <= 128 else { return [] }
+        let count = Int(countValue)
+        let stride = is64Bit ? 32 : 20
+        guard data.count >= 8 + count * stride else { return [] }
+        var versions: [OperatingSystemVersion] = []
+
+        for index in 0..<count {
+            let entry = 8 + index * stride
+            let offsetValue: UInt64?
+            let sizeValue: UInt64?
+            if is64Bit {
+                offsetValue = uint64(in: data, at: entry + 8, order: order)
+                sizeValue = uint64(in: data, at: entry + 16, order: order)
+            } else {
+                offsetValue = uint32(in: data, at: entry + 8, order: order).map(UInt64.init)
+                sizeValue = uint32(in: data, at: entry + 12, order: order).map(UInt64.init)
+            }
+            guard let offsetValue, let sizeValue,
+                  offsetValue <= UInt64(Int.max), sizeValue <= UInt64(Int.max) else { return [] }
+            let offset = Int(offsetValue)
+            let size = Int(sizeValue)
+            guard offset >= 0, size > 0, offset <= data.count,
+                  size <= data.count - offset,
+                  let sliceVersions = minimumSystemVersions(inThinMachO: data,
+                                                             offset: offset,
+                                                             size: size)
+                    ?? minimumSystemVersions(inArchive: data, offset: offset, size: size),
+                  !sliceVersions.isEmpty else { return [] }
+            versions.append(contentsOf: sliceVersions)
+        }
+        return versions
+    }
+
+    nonisolated private static func minimumSystemVersions(
+        inArchive data: Data,
+        offset: Int,
+        size: Int
+    ) -> [OperatingSystemVersion]? {
+        guard hasArchiveMagic(data, offset: offset, size: size) else { return nil }
+        let end = offset + size
+        var cursor = offset + 8
+        var versions: [OperatingSystemVersion] = []
+        var foundMachO = false
+
+        while cursor < end {
+            guard cursor <= end - 60,
+                  data[cursor + 58] == 0x60, data[cursor + 59] == 0x0A else { return [] }
+            let sizeText = String(decoding: data[(cursor + 48)..<(cursor + 58)], as: UTF8.self)
+                .trimmingCharacters(in: .whitespaces)
+            guard !sizeText.isEmpty, sizeText.allSatisfy(\.isNumber),
+                  let memberSize = Int(sizeText), memberSize >= 0 else { return [] }
+            let content = cursor + 60
+            guard content <= end, memberSize <= end - content else { return [] }
+
+            let name = String(decoding: data[cursor..<(cursor + 16)], as: UTF8.self)
+                .trimmingCharacters(in: .whitespaces)
+            var objectOffset = content
+            var objectSize = memberSize
+            if name.hasPrefix("#1/"), let nameSize = Int(name.dropFirst(3)) {
+                guard nameSize <= objectSize else { return [] }
+                objectOffset += nameSize
+                objectSize -= nameSize
+            }
+
+            if let memberVersions = minimumSystemVersions(inThinMachO: data,
+                                                           offset: objectOffset,
+                                                           size: objectSize) {
+                foundMachO = true
+                guard !memberVersions.isEmpty else { return [] }
+                versions.append(contentsOf: memberVersions)
+            }
+
+            cursor = content + memberSize
+            if cursor % 2 != 0 { cursor += 1 }
+        }
+        guard cursor == end else { return [] }
+        return foundMachO ? versions : []
+    }
+
+    nonisolated private static func hasArchiveMagic(_ data: Data,
+                                                     offset: Int,
+                                                     size: Int) -> Bool {
+        guard size >= 8, offset >= 0, offset <= data.count,
+              size <= data.count - offset else { return false }
+        return data[offset] == 0x21 && data[offset + 1] == 0x3C
+            && data[offset + 2] == 0x61 && data[offset + 3] == 0x72
+            && data[offset + 4] == 0x63 && data[offset + 5] == 0x68
+            && data[offset + 6] == 0x3E && data[offset + 7] == 0x0A
+    }
+
+    nonisolated private static func minimumSystemVersions(
+        inThinMachO data: Data,
+        offset: Int,
+        size: Int
+    ) -> [OperatingSystemVersion]? {
+        guard size >= 4, offset >= 0, offset <= data.count, size <= data.count - offset,
+              let magic = uint32(in: data, at: offset, order: .little) else { return nil }
+        let order: ByteOrder
+        let headerSize: Int
+        switch magic {
+        case 0xFEED_FACE:
+            order = .little
+            headerSize = 28
+        case 0xFEED_FACF:
+            order = .little
+            headerSize = 32
+        case 0xCEFA_EDFE:
+            order = .big
+            headerSize = 28
+        case 0xCFFA_EDFE:
+            order = .big
+            headerSize = 32
+        default:
+            return nil
+        }
+
+        guard size >= headerSize,
+              let commandCountValue = uint32(in: data, at: offset + 16, order: order),
+              let commandBytesValue = uint32(in: data, at: offset + 20, order: order),
+              commandCountValue <= 65_536 else { return [] }
+        let commandCount = Int(commandCountValue)
+        let commandBytes = Int(commandBytesValue)
+        guard commandBytes <= size - headerSize else { return [] }
+
+        var cursor = offset + headerSize
+        let commandEnd = cursor + commandBytes
+        var versions: [OperatingSystemVersion] = []
+        for _ in 0..<commandCount {
+            guard cursor <= commandEnd - 8,
+                  let command = uint32(in: data, at: cursor, order: order),
+                  let commandSizeValue = uint32(in: data, at: cursor + 4, order: order),
+                  commandSizeValue >= 8 else { return [] }
+            let commandSize = Int(commandSizeValue)
+            guard commandSize <= commandEnd - cursor else { return [] }
+
+            if command == 0x32 {
+                guard commandSize >= 24,
+                      let platform = uint32(in: data, at: cursor + 8, order: order),
+                      let minimum = uint32(in: data, at: cursor + 12, order: order) else { return [] }
+                if platform == 1 { versions.append(systemVersion(fromMachO: minimum)) }
+            } else if command == 0x24 {
+                guard commandSize >= 16,
+                      let minimum = uint32(in: data, at: cursor + 8, order: order) else { return [] }
+                versions.append(systemVersion(fromMachO: minimum))
+            }
+            cursor += commandSize
+        }
+        return versions
+    }
+
+    nonisolated private static func bundledMachOsSupportCurrentSystem(
+        in appURL: URL,
+        current: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion
+    ) -> Bool {
+        let manager = FileManager.default
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey]
+        guard let enumerator = manager.enumerator(at: appURL,
+                                                  includingPropertiesForKeys: keys,
+                                                  options: []) else { return false }
+        var foundMachO = false
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true, values.isSymbolicLink != true,
+                  let handle = try? FileHandle(forReadingFrom: fileURL) else { continue }
+            let prefix = try? handle.read(upToCount: 8)
+            try? handle.close()
+            guard let prefix, isMachOContainerMagic(prefix) else { continue }
+            guard let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe),
+                  let versions = minimumSystemVersions(inMachO: data) else { return false }
+            foundMachO = true
+            guard !versions.isEmpty,
+                  versions.allSatisfy({ version($0, isAtMost: current) }) else { return false }
+        }
+        return foundMachO
+    }
+
+    nonisolated private static func isMachOContainerMagic(_ data: Data) -> Bool {
+        if hasArchiveMagic(data, offset: 0, size: data.count) { return true }
+        guard let big = uint32(in: data, at: 0, order: .big),
+              let little = uint32(in: data, at: 0, order: .little) else { return false }
+        return [0xCAFE_BABE, 0xBEBA_FECA, 0xCAFE_BABF, 0xBFBA_FECA].contains(big)
+            || [0xFEED_FACE, 0xFEED_FACF, 0xCEFA_EDFE, 0xCFFA_EDFE].contains(little)
+    }
+
+    nonisolated private static func systemVersion(fromMachO value: UInt32) -> OperatingSystemVersion {
+        OperatingSystemVersion(majorVersion: Int(value >> 16),
+                               minorVersion: Int((value >> 8) & 0xFF),
+                               patchVersion: Int(value & 0xFF))
+    }
+
+    nonisolated private static func version(_ value: OperatingSystemVersion,
+                                             isAtMost maximum: OperatingSystemVersion) -> Bool {
+        (value.majorVersion, value.minorVersion, value.patchVersion)
+            <= (maximum.majorVersion, maximum.minorVersion, maximum.patchVersion)
+    }
+
+    nonisolated private static func uint32(in data: Data, at offset: Int,
+                                            order: ByteOrder) -> UInt32? {
+        guard offset >= 0, offset <= data.count - 4 else { return nil }
+        let bytes = (UInt32(data[offset]), UInt32(data[offset + 1]),
+                     UInt32(data[offset + 2]), UInt32(data[offset + 3]))
+        switch order {
+        case .little:
+            return bytes.0 | (bytes.1 << 8) | (bytes.2 << 16) | (bytes.3 << 24)
+        case .big:
+            return (bytes.0 << 24) | (bytes.1 << 16) | (bytes.2 << 8) | bytes.3
+        }
+    }
+
+    nonisolated private static func uint64(in data: Data, at offset: Int,
+                                            order: ByteOrder) -> UInt64? {
+        guard let first = uint32(in: data, at: offset, order: order),
+              let second = uint32(in: data, at: offset + 4, order: order) else { return nil }
+        switch order {
+        case .little:
+            return UInt64(first) | (UInt64(second) << 32)
+        case .big:
+            return (UInt64(first) << 32) | UInt64(second)
+        }
+    }
+
+    nonisolated private enum ByteOrder {
+        case little
+        case big
+    }
+
     nonisolated static func removeAbandonedTemporaryFiles() {
         let manager = FileManager.default
         let directory = manager.temporaryDirectory
@@ -419,6 +706,17 @@ final class UpdateInstaller: NSObject {
         }
         guard isExpectedVersion(info["CFBundleShortVersionString"] as? String, release: version) else {
             throw UpdatePreparationError.versionMismatch
+        }
+        guard isCompatibleMinimumSystemVersion(info["LSMinimumSystemVersion"] as? String) else {
+            throw UpdatePreparationError.incompatibleSystem
+        }
+        guard areCompatibleArchitectureMinimumSystemVersions(
+            info["LSMinimumSystemVersionByArchitecture"]
+        ) else {
+            throw UpdatePreparationError.incompatibleSystem
+        }
+        guard bundledMachOsSupportCurrentSystem(in: appURL) else {
+            throw UpdatePreparationError.incompatibleSystem
         }
         guard let executableName = info["CFBundleExecutable"] as? String,
               executableName == (executableName as NSString).lastPathComponent,
@@ -820,6 +1118,7 @@ private enum UpdatePreparationError: LocalizedError {
     case cannotStage
     case identityMismatch
     case versionMismatch
+    case incompatibleSystem
     case missingExecutable
     case invalidApplication
     case exchangeRequiresSiblings
@@ -848,6 +1147,8 @@ private enum UpdatePreparationError: LocalizedError {
             return "无法把更新暂存到应用所在目录。"
         case .identityMismatch:
             return "更新包身份不符，已拒绝安装。"
+        case .incompatibleSystem:
+            return "该更新不支持当前 macOS 版本，已保留现有应用。"
         case .versionMismatch:
             return "更新包版本与发布版本不符，已拒绝安装。"
         case .missingExecutable:

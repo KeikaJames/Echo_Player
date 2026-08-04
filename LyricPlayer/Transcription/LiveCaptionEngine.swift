@@ -151,6 +151,7 @@ final class LiveCaptionSession {
                 await MainActor.run {
                     if self.currentGeneration() == gen { self.state = .listening }
                 }
+                self.startDiarizationLoop(gen: gen)
             } catch is CancellationError {
                 return
             } catch {
@@ -233,18 +234,18 @@ final class LiveCaptionSession {
         guard let data = buffer.floatChannelData else { return }
         let count = Int(buffer.frameLength)
         guard count > 0 else { return }
-        diarLock.lock()
-        diarAudio.append(contentsOf: UnsafeBufferPointer(start: data[0], count: count))
-        // 超限后按分钟级大块裁剪：若逐回调裁剪，达到上限后每次 tap 都要整段
-        // memmove ~14M 个样本（~670MB/s 的无效搬移，还都发生在锁内）
-        let maxSamples = Int(Self.diarMaxSeconds * Self.diarSampleRate)
-        let slack = Int(60 * Self.diarSampleRate)
-        if diarAudio.count > maxSamples + slack {
-            let drop = diarAudio.count - maxSamples
-            diarAudio.removeFirst(drop)
-            diarTrimmedSeconds += Double(drop) / Self.diarSampleRate
+        diarLock.withLock {
+            diarAudio.append(contentsOf: UnsafeBufferPointer(start: data[0], count: count))
+            // 超限后按分钟级大块裁剪：若逐回调裁剪，达到上限后每次 tap 都要整段
+            // memmove ~14M 个样本（~670MB/s 的无效搬移，还都发生在锁内）
+            let maxSamples = Int(Self.diarMaxSeconds * Self.diarSampleRate)
+            let slack = Int(60 * Self.diarSampleRate)
+            if diarAudio.count > maxSamples + slack {
+                let drop = diarAudio.count - maxSamples
+                diarAudio.removeFirst(drop)
+                diarTrimmedSeconds += Double(drop) / Self.diarSampleRate
+            }
         }
-        diarLock.unlock()
     }
 
     /// 每 5 秒对整段会话音频跑一次说话人聚类，回填每句字幕的说话人编号。
@@ -257,12 +258,11 @@ final class LiveCaptionSession {
                 try? await Task.sleep(for: .seconds(interval))
                 guard let self, self.currentGeneration() == gen else { return }
 
-                self.diarLock.lock()
-                // 显式深拷贝：直接赋值是 COW 共享，下一次 tap 追加时会在音频回调里
-                // 触发整缓冲（最大 57MB）的隐式拷贝；在这里拷则 tap 最多短暂等锁
-                let samples = self.diarAudio.withUnsafeBufferPointer { Array($0) }
-                let offset = self.diarTrimmedSeconds
-                self.diarLock.unlock()
+                let (samples, offset) = self.diarLock.withLock {
+                    // 显式深拷贝：直接赋值是 COW 共享，下一次 tap 追加时会在音频回调里
+                    // 触发整缓冲（最大 57MB）的隐式拷贝；在这里拷则 tap 最多短暂等锁
+                    (self.diarAudio.withUnsafeBufferPointer { Array($0) }, self.diarTrimmedSeconds)
+                }
 
                 let bufferSeconds = Double(samples.count) / Self.diarSampleRate
                 // 全量重聚类的代价随缓冲线性涨：间隔随之拉大（15 分钟缓冲 ≈ 45s 一轮），
@@ -440,9 +440,7 @@ final class LiveCaptionSession {
 
     /// 导出本次会话的录音（16kHz 单声道 WAV）。
     func saveRecording() {
-        diarLock.lock()
-        let samples = diarAudio
-        diarLock.unlock()
+        let samples = diarLock.withLock { diarAudio }
         guard !samples.isEmpty else { return }
 
         let panel = NSSavePanel()
@@ -571,10 +569,10 @@ final class LiveCaptionSession {
         }
 
         // 重置会话音频缓冲（说话人状态属 UI，在下面的主线程提交段重置）
-        diarLock.lock()
-        diarAudio.removeAll()
-        diarTrimmedSeconds = 0
-        diarLock.unlock()
+        diarLock.withLock {
+            diarAudio.removeAll()
+            diarTrimmedSeconds = 0
+        }
 
         let backend = ModernLiveBackend(analyzer: analyzer, inputBuilder: inputBuilder)
         backend.resultsTask = Task { [weak self] in
@@ -633,6 +631,8 @@ final class LiveCaptionSession {
         }
     }
 
+    #endif
+
     /// 把麦克风缓冲转换成目标采样格式。
     private static func convert(_ buffer: AVAudioPCMBuffer,
                                 with converter: AVAudioConverter,
@@ -654,7 +654,6 @@ final class LiveCaptionSession {
         }
         return error == nil ? output : nil
     }
-    #endif
 
     // MARK: - 旧系统：SFSpeechRecognizer 流式识别
 
@@ -675,15 +674,29 @@ final class LiveCaptionSession {
         guard micFormat.sampleRate > 0, micFormat.channelCount > 0 else {
             throw TranscriptionError.recognizerUnavailable
         }
+        let diarFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                       sampleRate: Self.diarSampleRate,
+                                       channels: 1, interleaved: false)
+        let diarConverter = diarFormat.flatMap { AVAudioConverter(from: micFormat, to: $0) }
+        diarLock.withLock {
+            diarAudio.removeAll()
+            diarTrimmedSeconds = 0
+        }
 
         // 提交段（主线程，与 stop() 串行）：过了这道闸麦克风才真正开启
         try await MainActor.run {
             guard !Task.isCancelled, self.currentGeneration() == gen else { throw CancellationError() }
+            self.speakerOrder.removeAll()
+            self.speakerCount = 0
             inputNode.removeTap(onBus: 0)
             inputNode.installTap(onBus: 0, bufferSize: 4096, format: micFormat) { [weak self] buffer, _ in
                 guard let self, self.currentGeneration() == gen else { return }
                 let request = self.genLock.withLock { self.legacyRequest }
                 request?.append(buffer)
+                if let diarFormat, let diarConverter,
+                   let converted = Self.convert(buffer, with: diarConverter, to: diarFormat) {
+                    self.appendDiarizationAudio(converted)
+                }
             }
             self.audioEngine.prepare()
             try self.audioEngine.start()
@@ -695,6 +708,9 @@ final class LiveCaptionSession {
     /// 一段话结束（isFinal）或出错（约 1 分钟限制）后自动开启新一轮识别。
     private func startLegacyRequest(gen: Int) {
         guard currentGeneration() == gen, let recognizer = legacyRecognizer else { return }
+        let requestOffset = diarLock.withLock {
+            diarTrimmedSeconds + Double(diarAudio.count) / Self.diarSampleRate
+        }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -710,7 +726,8 @@ final class LiveCaptionSession {
                     self.legacyRetryStreak = 0   // 有产出即视为健康
                     let text = result.bestTranscription.formattedString
                     if result.isFinal {
-                        self.deliver(text: text, isFinal: true, gen: gen)
+                        let range = Self.legacyTimeRange(result.bestTranscription, offset: requestOffset)
+                        self.deliver(text: text, isFinal: true, gen: gen, range: range)
                         self.startLegacyRequest(gen: gen)
                     } else {
                         self.deliver(text: text, isFinal: false, gen: gen)
@@ -733,6 +750,16 @@ final class LiveCaptionSession {
                 }
             }
         }
+    }
+
+    private static func legacyTimeRange(_ transcription: SFTranscription,
+                                        offset: Double) -> ClosedRange<Double>? {
+        guard let first = transcription.segments.first,
+              let last = transcription.segments.last else { return nil }
+        let start = first.timestamp + offset
+        let end = last.timestamp + last.duration + offset
+        guard start.isFinite, end.isFinite, end > start else { return nil }
+        return start...end
     }
 }
 
