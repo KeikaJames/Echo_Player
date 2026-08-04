@@ -4,11 +4,6 @@
 
 # Echo Player
 
-**会自己找歌词的 macOS 播放器**
-
-打开一首歌，歌词自己出现；打开一部片，字幕自己浮上来。<br>
-没有设置页，没有模型选项，没有"请先下载"——一切都已就位。
-
 ![macOS](https://img.shields.io/badge/macOS-26.0%2B-blue)
 ![芯片](https://img.shields.io/badge/Apple%20Silicon-原生优化-8A56F5)
 ![技术](https://img.shields.io/badge/SwiftUI-Liquid%20Glass-orange)
